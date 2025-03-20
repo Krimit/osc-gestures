@@ -11,6 +11,7 @@ class CameraSetup():
     def __init__(self):
         self.camera_indexes = []
         self.videos = []
+        self.names = []
         self.quit = False
 
 
@@ -60,15 +61,8 @@ class CameraSetup():
             print("Ignoring empty frame")
             return
 
-        # f = frame.flatten()
-        # print("%%%%%%%%")
-        # print(str(np.shape(frame)))
-        # print(str(np.shape(f)))
-        # print("%%%%%%%%")
-        # row = f.tolist()
-        # print("akrim debugging numpy. Type: {}, data: {}".format(type(f), f))
-        #client.send_message("/video_" + str(index), row)
-        cv2.imshow('Show' + str(index), frame)
+        camera_name = self.names[index]
+        cv2.imshow(camera_name, frame)
         
         if cv2.waitKey(1) & 0xFF == ord('q'):
             print("Closing Camera Stream")
@@ -84,7 +78,12 @@ class CameraSetup():
     def start_all_videos(self):
         self.camera_indexes = self.find_camera_indexes()
         self.videos = [cv2.VideoCapture(k) for k in self.camera_indexes]
-        print("type: {}".format(type(self.videos[0])))
+        self.names = ["Camera_" + str(i) for i, _ in enumerate(self.videos)]
+
+        names = ["None"] + self.names
+        
+        print("sending camera names to Max: {}".format(names))
+        client.send_message("/camera_names", names)
         return self 
 
             

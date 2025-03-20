@@ -28,7 +28,8 @@ from mediapipe.framework.formats import landmark_pb2
 import numpy as np
 
 class Mediapipe_HandsModule():
-    def __init__(self):
+    def __init__(self, camera_name: str):
+        self.camera_name = camera_name
         self.mp_drawing = solutions.drawing_utils
         self.results = None
         self.video = None
@@ -38,6 +39,12 @@ class Mediapipe_HandsModule():
         self.quit = False
         self.init()
 
+    def close(self):
+        print("closing hands video")
+        self.video.release()
+        self.landmarker.close()
+        cv2.destroyAllWindows()
+        cv2.waitKey(1)
 
     def __enter__(self):
         self.landmarker.__enter__()
@@ -102,11 +109,6 @@ class Mediapipe_HandsModule():
     def print_result(self, result: HandLandmarkerResult, output_image: mp.Image, timestamp_ms: int):
         #print('hand landmarker result: {}'.format(result))
         self.results = result
-
-    def close(self):
-        self.video.release()
-        cv2.destroyAllWindows()
-        self.landmarker.close()
         
     def do_loop(self, is_enabled: bool):
         #print("do loop: {}".format(self))
@@ -152,35 +154,6 @@ class Mediapipe_HandsModule():
             print("Closing Camera Stream")
             self.quit = True
             return    
-  
-    def find_camera_indexes(self):
-        # checks the first 10 indexes.
-        index = 0
-        arr = []
-        while index < 10:
-            cap = cv2.VideoCapture(index)
-            try:
-                print("akrim: {}".format(cap.getBackendName()))
-            except:
-                print("akrim invalid camera index.")
-                
-            if cap.read()[0]:
-                arr.append(index)
-            cap.release()
-            index += 1
-
-        print("camera indexes: {}".format(arr))    
-        return arr
-
-    # def get_available_cameras(self):
-    #     devices = FilterGraph().get_input_devices()
-    #     available_cameras = {}
-
-    #     for device_index, device_name in enumerate(devices):
-    #         available_cameras[device_index] = device_name
-
-    #     print("get_available_cameras: {}".format(available_cameras))    
-    #     return available_cameras    
 
     def init(self):
         options = HandLandmarkerOptions(
@@ -192,20 +165,20 @@ class Mediapipe_HandsModule():
             min_tracking_confidence = 0.5,
             result_callback=self.print_result)
         self.timestamp = 0
-        camera_indexes = self.find_camera_indexes()
-        #self.get_available_cameras()
-        # for camera_info in enumerate_cameras():
-        #     print("akrim camera info: {}".format(camera_info))
-        #self.video = cv2.VideoCapture("6C707041-05AC-0010-0008-000000000001") #system_profiler SPCameraDataType
-        self.video = cv2.VideoCapture(camera_indexes[0]) #0 for external
+        camera_num_string = self.camera_name.split("_")[-1]
+        try:
+            camera_num = int(camera_num_string)
+        except ValueError:
+            print("Cannot convert to integer: {}. Defaulting to camera 0".format(camera_index))
+            camera_num = 0
+        self.video = cv2.VideoCapture(camera_num)
         print("debugging isOpened: {}".format(self.video.isOpened()))
         self.landmarker = HandLandmarker.create_from_options(options)
         return self 
 
             
 if __name__ == "__main__":
-    with Mediapipe_HandsModule() as hands_module:
-        hands_module.init()
+    with Mediapipe_HandsModule("Camera_0") as hands_module:
         while hands_module.is_open():
             hands_module.do_loop()
 
