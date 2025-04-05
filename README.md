@@ -1,3 +1,12 @@
+### Training
+
+The idea: maybe we want to have our own gestures. We have 3 options:
+1) Hard code the detection in MaxMSP
+2) Send the OSC landmarks to Wekinator and classify there, sending the result to MaxMSP
+3) Train our own model directly with MediaPipe.
+
+The following is an initial attempt at (3). If it proves too time-consuming will fall back to other alternatives.
+
 Following https://ai.google.dev/edge/mediapipe/solutions/customization/gesture_recognizer. Taking some inspiration from https://github.com/Thomas9363/How-to-Train-Custom-Hand-Gestures-Using-Mediapipe/tree/main
 
 ### Customizing the gesture model
