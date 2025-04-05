@@ -1,4 +1,4 @@
-Taking inspiration from https://github.com/Thomas9363/How-to-Train-Custom-Hand-Gestures-Using-Mediapipe/tree/main
+Following https://ai.google.dev/edge/mediapipe/solutions/customization/gesture_recognizer. Taking some inspiration from https://github.com/Thomas9363/How-to-Train-Custom-Hand-Gestures-Using-Mediapipe/tree/main
 
 ### Customizing the gesture model
 
