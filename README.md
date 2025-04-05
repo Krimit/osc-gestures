@@ -1,4 +1,4 @@
-
+Taking inspiration from https://github.com/Thomas9363/How-to-Train-Custom-Hand-Gestures-Using-Mediapipe/tree/main
 
 ### Customizing the gesture model
 
