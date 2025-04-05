@@ -21,6 +21,12 @@ HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
 HandLandmarkerResult = mp.tasks.vision.HandLandmarkerResult
 VisionRunningMode = mp.tasks.vision.RunningMode
 
+GestureRecognizerOptions = mp.tasks.vision.GestureRecognizerOptions
+GestureRecognizer = mp.tasks.vision.GestureRecognizer
+GestureRecognizerResult = mp.tasks.vision.GestureRecognizerResult
+
+
+
 
 #@markdown To better demonstrate the Hand Landmarker API, we have created a set of visualization tools that will be used in this colab. These will draw the landmarks on a detect person, as well as the expected connections between those markers.
 from mediapipe import solutions
@@ -28,12 +34,19 @@ from mediapipe.framework.formats import landmark_pb2
 import numpy as np
 
 class Mediapipe_HandsModule():
+    """
+    Gesture Categories: Unknown, Closed_Fist, Open_Palm, Pointing_Up, Thumb_Down, Thumb_Up, Victory, ILoveYou. 
+    "_" means no hand detected, "Unknown" is used for hand detected but unknown gesture.
+    """
+
     def __init__(self, camera_name: str):
         self.camera_name = camera_name
         self.mp_drawing = solutions.drawing_utils
-        self.results = None
+        self.landmark_result = None
+        self.gesture_result = None
         self.video = None
         self.landmarker = None
+        self.recognizer = None
         self.timestamp = 0
         self.is_enabled = True
         self.quit = False
@@ -54,20 +67,29 @@ class Mediapipe_HandsModule():
         self.close()
 
     def __str__(self):
-        return "timestamp: {}, landmarker: {}, video: {}, results: {}".format(self.timestamp, self.landmarker, self.video, self.results)
+        return "timestamp: {}, landmarker: {}, video: {}, gesture_result: {}, landmark_result: {}".format(self.timestamp, self.landmarker, self.video, self.gesture_result, self.landmark_result)
 
     def is_open(self):
         return self.video.isOpened() and not self.quit   
 
-    def draw_landmarks_on_image(self, rgb_image, detection_result):
-      hand_landmarks_list = detection_result.hand_landmarks
-      handedness_list = detection_result.handedness
+    def draw_landmarks_on_image(self, rgb_image, landmark_result, gesture_result):
+      #print("akrim gestures: {}".format(gesture_result.gestures))
+      
+      # TODO: Can we get rid of the landmark model entirely?
+      #hand_landmarks_list = landmark_result.hand_landmarks
+      #handedness_list = landmark_result.handedness
+      
+      hand_landmarks_list = gesture_result.hand_landmarks
+      handedness_list = gesture_result.handedness
+      gestures_list = gesture_result.gestures
+
       annotated_image = np.copy(rgb_image)
 
       # Loop through the detected hands to visualize.
       for idx in range(len(hand_landmarks_list)):
         hand_landmarks = hand_landmarks_list[idx]
         handedness = handedness_list[idx]
+        gesture = gestures_list[idx]
 
         # Draw the hand landmarks.
         hand_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
@@ -89,27 +111,33 @@ class Mediapipe_HandsModule():
         text_y = int(min(y_coordinates) * height) - MARGIN
 
         # Draw handedness (left or right hand) on the image.
-        cv2.putText(annotated_image, f"{handedness[0].category_name}",
+        cv2.putText(annotated_image, f"{handedness[0].category_name, gesture[0].category_name}",
                     (text_x, text_y), cv2.FONT_HERSHEY_DUPLEX,
                     FONT_SIZE, HANDEDNESS_TEXT_COLOR, FONT_THICKNESS, cv2.LINE_AA)
         
         #send hand data via OSC
         hand = handedness[0].category_name
+        gesture_category = gesture[0].category_name
+        print("akrim category name: {}".format(gesture_category))
         row = []
+        row += gesture_category
         for idx, landmark in enumerate(hand_landmarks_proto.landmark):
             row += [idx, landmark.x, landmark.y, landmark.z]
             #print("handedness: {}, index: {}, {}, {}, {}".format(hand, idx, landmark.x, landmark.y, landmark.z))
             #client.send_message("/hand", [hand, idx, landmark.x, landmark.y, landmark.z])
-        print("hand: {}, row: {}".format(hand.lower(), row))
+        #print("hand: {}, row: {}".format(hand.lower(), row))
         client.send_message("/hand_" + hand.lower(), row)
       return annotated_image
 
 
-    # Create a hands landmarker instance with the live stream mode:
-    def print_result(self, result: HandLandmarkerResult, output_image: mp.Image, timestamp_ms: int):
+    def set_landmark_result(self, result: HandLandmarkerResult, output_image: mp.Image, timestamp_ms: int):
         #print('hand landmarker result: {}'.format(result))
-        self.results = result
-        
+        self.landmark_result = result
+    
+    def set_gesture_result(self, result: GestureRecognizerResult, output_image: mp.Image, timestamp_ms: int):
+        #print('hand landmarker result: {}'.format(result))
+        self.gesture_result = result
+
     def do_loop(self, is_enabled: bool):
         #print("do loop: {}".format(self))
         if not self.video.isOpened():
@@ -141,10 +169,11 @@ class Mediapipe_HandsModule():
         self.timestamp += 1
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
         self.landmarker.detect_async(mp_image, self.timestamp)
+        self.recognizer.recognize_async(mp_image, self.timestamp)
+
         
-        
-        if (not (self.results is None)):
-            annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), self.results)
+        if (not (self.gesture_result is None)):
+            annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), self.landmark_result, self.gesture_result)
             #cv2.imshow('Show',cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR))
             cv2.imshow('Show',annotated_image)
         else:
@@ -156,14 +185,6 @@ class Mediapipe_HandsModule():
             return    
 
     def init(self):
-        options = HandLandmarkerOptions(
-            base_options=BaseOptions(model_asset_path='hand_landmarker.task'),
-            running_mode=VisionRunningMode.LIVE_STREAM,
-            num_hands=2,
-            min_hand_detection_confidence= 0.5,
-            min_hand_presence_confidence= 0.5,
-            min_tracking_confidence = 0.5,
-            result_callback=self.print_result)
         self.timestamp = 0
         camera_num_string = self.camera_name.split("_")[-1]
         try:
@@ -173,12 +194,30 @@ class Mediapipe_HandsModule():
             camera_num = 0
         self.video = cv2.VideoCapture(camera_num)
         print("debugging isOpened: {}".format(self.video.isOpened()))
-        self.landmarker = HandLandmarker.create_from_options(options)
+
+        landmarker_options = HandLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path='hand_landmarker.task'),
+            running_mode=VisionRunningMode.LIVE_STREAM,
+            num_hands=2,
+            min_hand_detection_confidence= 0.5,
+            min_hand_presence_confidence= 0.5,
+            min_tracking_confidence = 0.5,
+            result_callback=self.set_landmark_result)
+        self.landmarker = HandLandmarker.create_from_options(landmarker_options)
+
+        gesture_options = GestureRecognizerOptions(
+            base_options=BaseOptions(model_asset_path='gesture_recognizer.task'),
+            running_mode=VisionRunningMode.LIVE_STREAM,
+            num_hands=2,
+            result_callback=self.set_gesture_result)
+        self.recognizer = GestureRecognizer.create_from_options(gesture_options)
+
+
         return self 
 
             
 if __name__ == "__main__":
     with Mediapipe_HandsModule("Camera_0") as hands_module:
         while hands_module.is_open():
-            hands_module.do_loop()
+            hands_module.do_loop(True)
 
