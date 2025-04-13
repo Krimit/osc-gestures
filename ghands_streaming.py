@@ -7,6 +7,8 @@ import numpy as np
 
 from pythonosc.udp_client import SimpleUDPClient
 
+f = open("test.task")
+print(f.read())
 
 client = SimpleUDPClient("127.0.0.1", 5056)
 

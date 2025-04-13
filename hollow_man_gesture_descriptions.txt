@@ -1,0 +1,21 @@
+gestures list:
+
+none
+closed_down
+closed_up
+open_spread_down
+spider_up
+duck_side
+open_side
+open_together_down_left
+open_together_down_right
+open_together_side_thumb_top
+open_together_side_pinky_top
+thumbs_up
+
+From Hagrid dataset:
+grip
+grabbing
+fist
+stop
+stop inv

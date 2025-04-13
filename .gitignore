@@ -1,12 +1,24 @@
 .DS_Store
 .python-version
 
-# model
-hand_landmarker.task
+# models and training data
+*.task
+training_data/
+exported_model/
 
 # Sublime stuff
 sensors.sublime-workspace
 sensors.sublime-project
+
+# pyenv stuff
+o1/
+o2/
+osc/
+*.cfg
+
+# linux stuff
+bin/
+lib64
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
