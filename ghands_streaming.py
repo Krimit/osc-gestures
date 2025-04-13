@@ -7,7 +7,6 @@ import numpy as np
 
 from pythonosc.udp_client import SimpleUDPClient
 
-
 client = SimpleUDPClient("127.0.0.1", 5056)
 
 MARGIN = 10  # pixels
