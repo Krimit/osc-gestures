@@ -19,7 +19,7 @@ from datetime import datetime
 # Define and parse input arguments
 parser = argparse.ArgumentParser()
 parser.add_argument('--imgdir', help='Folder to save images in (will be created if it doesn\'t exist already',
-                   default='Training Data')
+                   default='training_data')
 parser.add_argument('--label', help='The label of the pictures that will be taken. A folder will be created with this name if it does not already exist.')
 parser.add_argument('--resolution', help='Desired camera resolution in WxH.',
                    default='1920x1080')
@@ -35,6 +35,7 @@ if not 'x' in args.resolution:
     sys.exit()
 imW = int(args.resolution.split('x')[0])
 imH = int(args.resolution.split('x')[1])
+print("resolution extracted from {}: width={}, hight={}".format(args.resolution, imW, imH))
 
 # Create output directory if it doesn't already exist
 cwd = os.getcwd()
@@ -52,11 +53,11 @@ if not os.path.exists(subdirpath):
 # Creating file name template
 date = datetime.today().strftime('%Y%m%d')    
 example_filename = labelname + "_" + date + "_" + shortuuid.uuid() + ".jpg" 
-savepath = os.path.join(subdirpath, filename)
+savepath = os.path.join(subdirpath, example_filename)
 print("Example filename: {}".format(savepath))
 
 # Initialize webcam
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(1)
 ret = cap.set(3, imW)
 ret = cap.set(4, imH)
 
@@ -76,7 +77,7 @@ while True:
     if key == ord('q'):
         break
     # 32 is space key
-    elif key == ord('p') || key == 32: 
+    elif key == ord('p') or key == 32: 
         #Take a picture!
         filename = labelname + "_" + date + "_" + shortuuid.uuid() + ".jpg" 
         savepath = os.path.join(subdirpath, filename)
