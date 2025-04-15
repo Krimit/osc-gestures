@@ -1,16 +1,16 @@
 gestures list:
 
 none
-closed_down
-closed_up
+fist_down
+fist_up
 open_spread_down
 spider_up
 duck_side
-open_side
-open_together_down_left
-open_together_down_right
-open_together_side_thumb_top
-open_together_side_pinky_top
+grab_side
+stop_down_left
+stop_down_right
+stop_side_thumb_top
+stop_side_pinky_top
 thumbs_up
 
 From Hagrid dataset:
