@@ -5,6 +5,8 @@ from mediapipe import solutions
 from mediapipe.framework.formats import landmark_pb2
 import numpy as np
 
+from orientation_calculator import OrientationCalculator
+
 from pythonosc.udp_client import SimpleUDPClient
 
 client = SimpleUDPClient("127.0.0.1", 5056)
@@ -79,6 +81,7 @@ class Mediapipe_HandsModule():
       #handedness_list = landmark_result.handedness
       
       hand_landmarks_list = gesture_result.hand_landmarks
+      hand_world_landmark_list = gesture_result.hand_world_landmarks
       handedness_list = gesture_result.handedness
       gestures_list = gesture_result.gestures
 
@@ -87,8 +90,10 @@ class Mediapipe_HandsModule():
       # Loop through the detected hands to visualize.
       for idx in range(len(hand_landmarks_list)):
         hand_landmarks = hand_landmarks_list[idx]
+        world_landmarks = hand_world_landmark_list[idx]
         handedness = handedness_list[idx]
         gesture = gestures_list[idx]
+        hand_direction = OrientationCalculator.calc(world_landmarks)
 
         # Draw the hand landmarks.
         hand_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
@@ -120,6 +125,7 @@ class Mediapipe_HandsModule():
         print("akrim category name: {}".format(gesture_category))
         row = []
         row += gesture_category
+        row += hand_direction
         for idx, landmark in enumerate(hand_landmarks_proto.landmark):
             row += [idx, landmark.x, landmark.y, landmark.z]
             #print("handedness: {}, index: {}, {}, {}, {}".format(hand, idx, landmark.x, landmark.y, landmark.z))
