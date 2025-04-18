@@ -55,8 +55,8 @@ class OrientationCalculator():
     Calculate the orientation of an input.
     """
     def calc(world_landmarks):
-        w1 = world_landmarks[5]
-        w2 = world_landmarks[8]
+        w1 = world_landmarks[0]
+        w2 = world_landmarks[5]
         point1 = (w1.x, w1.y)
         point2 = (w2.x, w2.y)
 
