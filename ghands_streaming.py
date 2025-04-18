@@ -200,6 +200,8 @@ class Mediapipe_HandsModule():
         self.video = cv2.VideoCapture(camera_num)
         print("debugging isOpened: {}".format(self.video.isOpened()))
 
+        gesture_model_path = "gesture_recognizer_hollow1.task"
+        pretrain_model_path = "gesture_recognizer.task"
         landmarker_options = HandLandmarkerOptions(
             base_options=BaseOptions(model_asset_path='hand_landmarker.task'),
             running_mode=VisionRunningMode.LIVE_STREAM,
@@ -211,7 +213,7 @@ class Mediapipe_HandsModule():
         self.landmarker = HandLandmarker.create_from_options(landmarker_options)
 
         gesture_options = GestureRecognizerOptions(
-            base_options=BaseOptions(model_asset_path='gesture_recognizer.task'),
+            base_options=BaseOptions(model_asset_path=gesture_model_path),
             running_mode=VisionRunningMode.LIVE_STREAM,
             num_hands=2,
             result_callback=self.set_gesture_result)
@@ -222,7 +224,7 @@ class Mediapipe_HandsModule():
 
             
 if __name__ == "__main__":
-    with Mediapipe_HandsModule("Camera_0") as hands_module:
+    with Mediapipe_HandsModule("Camera_1") as hands_module:
         while hands_module.is_open():
             hands_module.do_loop(True)
 

@@ -6,6 +6,7 @@
 *.task
 training_data/
 exported_model/
+models/
 
 # Sublime stuff
 sensors.sublime-workspace
