@@ -165,7 +165,7 @@ class Mediapipe_FaceModule():
         # flip so directions are more intuitive in the shown video. Only do this when using the table, not laptop camera.    
         #frame = cv2.flip(frame,-1)    
 
-        self.timestamp += 1
+        self.timestamp = int(time.time() * 1000)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
         self.detector.detect_async(mp_image, self.timestamp)
 
@@ -208,7 +208,7 @@ class Mediapipe_FaceModule():
             
 if __name__ == "__main__":
     start_time = time.time()
-    with Mediapipe_FaceModule("Camera_1") as face_module:
+    with Mediapipe_FaceModule("Camera_0") as face_module:
         face_module.time_of_last_callback = start_time
         while face_module.is_open():
             face_module.do_loop(True, time.time())
