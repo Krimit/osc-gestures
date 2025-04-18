@@ -171,7 +171,7 @@ class Mediapipe_HandsModule():
         # flip so directions are more intuitive in the shown video. Only do this when using the table, not laptop camera.    
         #frame = cv2.flip(frame,-1)    
 
-        self.timestamp += 1
+        self.timestamp = int(time.time() * 1000)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
         self.landmarker.detect_async(mp_image, self.timestamp)
         self.recognizer.recognize_async(mp_image, self.timestamp)
