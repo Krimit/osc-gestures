@@ -9,6 +9,8 @@ import numpy as np
 
 import time
 
+from video_manager import VideoManager
+
 from pythonosc.udp_client import SimpleUDPClient
 
 client = SimpleUDPClient("127.0.0.1", 5056)
@@ -19,16 +21,7 @@ FONT_THICKNESS = 1
 HANDEDNESS_TEXT_COLOR = (88, 205, 54) # vibrant green
 
 BaseOptions = mp.tasks.BaseOptions
-HandLandmarker = mp.tasks.vision.HandLandmarker
-HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
-HandLandmarkerResult = mp.tasks.vision.HandLandmarkerResult
 VisionRunningMode = mp.tasks.vision.RunningMode
-
-GestureRecognizerOptions = mp.tasks.vision.GestureRecognizerOptions
-GestureRecognizer = mp.tasks.vision.GestureRecognizer
-GestureRecognizerResult = mp.tasks.vision.GestureRecognizerResult
-
-
 
 
 #@markdown To better demonstrate the Hand Landmarker API, we have created a set of visualization tools that will be used in this colab. These will draw the landmarks on a detect person, as well as the expected connections between those markers.
@@ -38,12 +31,10 @@ import numpy as np
 
 class Mediapipe_FaceModule():
     """
-    Gesture Categories: Unknown, Closed_Fist, Open_Palm, Pointing_Up, Thumb_Down, Thumb_Up, Victory, ILoveYou. 
-    "_" means no hand detected, "Unknown" is used for hand detected but unknown gesture.
+
     """
 
-    def __init__(self, camera_name: str):
-        self.camera_name = camera_name
+    def __init__(self):
         self.mp_drawing = solutions.drawing_utils
         self.detector_result = None
         self.video = None
@@ -55,11 +46,8 @@ class Mediapipe_FaceModule():
         self.init()
 
     def close(self):
-        print("closing hands video")
-        self.video.release()
+        print("closing face model")
         self.detector.close()
-        cv2.destroyAllWindows()
-        cv2.waitKey(1)
 
     def __enter__(self):
         self.detector.__enter__()
@@ -69,10 +57,10 @@ class Mediapipe_FaceModule():
         self.close()
 
     def __str__(self):
-        return "timestamp: {}, detector: {}, video: {}, detector_result: {}".format(self.timestamp, self.detector, self.video, self.detector_result)
+        return "timestamp: {}, detector: {}, detector_result: {}".format(self.timestamp, self.detector, self.detector_result)
 
     def is_open(self):
-        return self.video.isOpened() and not self.quit   
+        return not self.quit
 
 
     def draw_landmarks_on_image(self, rgb_image, detection_result, start_time):
@@ -134,66 +122,37 @@ class Mediapipe_FaceModule():
 
 
     def set_detector_result(self, result, output_image: mp.Image, timestamp_ms: int):
+        print("--- loop time %s ms ---" % ((time.time() * 1000) - (timestamp_ms * 1000)))
         #print('hand landmarker result: {}'.format(result))
         self.detector_result = result
+        self.mp_image = output_image
+        self.time_of_last_callback = time.time()
 
-    def do_loop(self, is_enabled: bool, current_time):
-        #print("do loop: {}".format(self))
-        if not self.video.isOpened():
-            print("video is closed, shutting down.")
+    def result_is_ready(self):
+        return self.detector_result is not None
+
+    def annotate_image(self, mp_image: mp.Image):
+        if not self.result_is_ready():
+            return None
+        img = mp_image
+        if img is None:
+            img = self.mp_image
+        annotated_image = self.draw_landmarks_on_image(img.numpy_view(), self.detector_result, time.time())
+        self.gesture_result = None
+        return annotated_image
+
+    def recognize_frame_async(self, is_enabled: bool, frame):
+        if frame is None:
             return
-
-        # Capture frame-by-frame
-        ret, frame = self.video.read()
-
-        if not ret:
-            print("Ignoring empty frame")
-            return    
             
-        self.is_enabled = is_enabled    
-        if not(is_enabled):
-            #print("loop - hands disabled")
-            cv2.imshow('Show', frame)
-            if cv2.waitKey(0) & 0xFF == ord('q'):
-                print("Closing Camera Stream")
-                self.quit = True
-            return
-        #else:
-            #print("loop - hands enabled")    
-
-        
-        # flip so directions are more intuitive in the shown video. Only do this when using the table, not laptop camera.    
-        #frame = cv2.flip(frame,-1)    
+        self.is_enabled = is_enabled      
 
         self.timestamp = int(time.time() * 1000)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
         self.detector.detect_async(mp_image, self.timestamp)
 
-        
-        if (not (self.detector_result is None)):
-            annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), self.detector_result, current_time)
-            #cv2.imshow('Show',cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR))
-            cv2.imshow('Show',annotated_image)
-        else:
-            cv2.imshow('Show', frame)
-        
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            print("Closing Camera Stream")
-            self.quit = True
-            return    
-
-        print("--- loop time %s ms ---" % ((time.time() * 1000) - (current_time * 1000)))
-
     def init(self):
         self.timestamp = 0
-        camera_num_string = self.camera_name.split("_")[-1]
-        try:
-            camera_num = int(camera_num_string)
-        except ValueError:
-            print("Cannot convert to integer: {}. Defaulting to camera 0".format(camera_index))
-            camera_num = 0
-        self.video = cv2.VideoCapture(camera_num)
-        print("debugging isOpened: {}".format(self.video.isOpened()))
 
         base_options = BaseOptions(model_asset_path='face_landmarker_v2_with_blendshapes.task')
         options = vision.FaceLandmarkerOptions(base_options=base_options,
@@ -207,9 +166,15 @@ class Mediapipe_FaceModule():
 
             
 if __name__ == "__main__":
-    start_time = time.time()
-    with Mediapipe_FaceModule("Camera_0") as face_module:
-        face_module.time_of_last_callback = start_time
-        while face_module.is_open():
-            face_module.do_loop(True, time.time())
+    with Mediapipe_FaceModule() as face_module:
+        with VideoManager("Camera_1") as video_manager:
+            while video_manager.is_open() and face_module.is_open():
+                frame = video_manager.capture_frame(True)
+                face_module.recognize_frame_async(True, frame)
+                annotated_image = face_module.annotate_image()
+                if annotated_image is None:
+                    print("skipping frame")
+                    video_manager.draw(frame)
+                else:
+                    video_manager.draw(annotated_image)         
 

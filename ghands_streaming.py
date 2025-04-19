@@ -1,11 +1,13 @@
 import mediapipe as mp
 import cv2
+import time
 
 from mediapipe import solutions
 from mediapipe.framework.formats import landmark_pb2
 import numpy as np
 
 from orientation_calculator import OrientationCalculator
+from video_manager import VideoManager
 
 from pythonosc.udp_client import SimpleUDPClient
 
@@ -40,12 +42,11 @@ class Mediapipe_HandsModule():
     "_" means no hand detected, "Unknown" is used for hand detected but unknown gesture.
     """
 
-    def __init__(self, camera_name: str):
-        self.camera_name = camera_name
+    def __init__(self):
         self.mp_drawing = solutions.drawing_utils
         self.landmark_result = None
         self.gesture_result = None
-        self.video = None
+        self.mp_image = None
         self.landmarker = None
         self.recognizer = None
         self.timestamp = 0
@@ -54,24 +55,23 @@ class Mediapipe_HandsModule():
         self.init()
 
     def close(self):
-        print("closing hands video")
-        self.video.release()
+        print("closing hands model")
         self.landmarker.close()
-        cv2.destroyAllWindows()
-        cv2.waitKey(1)
+        self.recognizer.close()
 
     def __enter__(self):
         self.landmarker.__enter__()
+        self.recognizer.__enter__()
         return self
 
     def __exit__(self, unused_exc_type, unused_exc_value, unused_traceback):
         self.close()
 
     def __str__(self):
-        return "timestamp: {}, landmarker: {}, video: {}, gesture_result: {}, landmark_result: {}".format(self.timestamp, self.landmarker, self.video, self.gesture_result, self.landmark_result)
+        return "timestamp: {}, landmarker: {}, gesture_result: {}, landmark_result: {}".format(self.timestamp, self.landmarker, self.gesture_result, self.landmark_result)
 
     def is_open(self):
-        return self.video.isOpened() and not self.quit   
+        return not self.quit   
 
     def draw_landmarks_on_image(self, rgb_image, landmark_result, gesture_result):
       #print("akrim gestures: {}".format(gesture_result.gestures))
@@ -138,68 +138,36 @@ class Mediapipe_HandsModule():
     def set_landmark_result(self, result: HandLandmarkerResult, output_image: mp.Image, timestamp_ms: int):
         #print('hand landmarker result: {}'.format(result))
         self.landmark_result = result
+        self.mp_image = output_image
     
     def set_gesture_result(self, result: GestureRecognizerResult, output_image: mp.Image, timestamp_ms: int):
         #print('hand landmarker result: {}'.format(result))
         self.gesture_result = result
+        self.mp_image = output_image
 
-    def do_loop(self, is_enabled: bool):
-        #print("do loop: {}".format(self))
-        if not self.video.isOpened():
-            print("video is closed, shutting down.")
+    def result_is_ready(self):
+        return self.gesture_result is not None
+
+    def annotate_image(self, mp_image: mp.Image):
+        if not self.result_is_ready():
+            return None
+        annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), self.landmark_result, self.gesture_result)
+        self.gesture_result = None
+        return annotated_image
+
+    def recognize_frame_async(self, is_enabled: bool, frame):
+        if frame is None:
             return
-
-        # Capture frame-by-frame
-        ret, frame = self.video.read()
-
-        if not ret:
-            print("Ignoring empty frame")
-            return    
-            
-        self.is_enabled = is_enabled    
-        if not(is_enabled):
-            #print("loop - hands disabled")
-            cv2.imshow('Show', frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                print("Closing Camera Stream")
-                self.quit = True
-            return
-        #else:
-            #print("loop - hands enabled")    
-
         
-        # flip so directions are more intuitive in the shown video. Only do this when using the table, not laptop camera.    
-        #frame = cv2.flip(frame,-1)    
-
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)    
+        self.is_enabled = is_enabled      
         self.timestamp = int(time.time() * 1000)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
         self.landmarker.detect_async(mp_image, self.timestamp)
         self.recognizer.recognize_async(mp_image, self.timestamp)
 
-        
-        if (not (self.gesture_result is None)):
-            annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), self.landmark_result, self.gesture_result)
-            #cv2.imshow('Show',cv2.cvtColor(annotated_image, cv2.COLOR_RGB2BGR))
-            cv2.imshow('Show',annotated_image)
-        else:
-            cv2.imshow('Show', frame)
-        
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            print("Closing Camera Stream")
-            self.quit = True
-            return    
 
     def init(self):
         self.timestamp = 0
-        camera_num_string = self.camera_name.split("_")[-1]
-        try:
-            camera_num = int(camera_num_string)
-        except ValueError:
-            print("Cannot convert to integer: {}. Defaulting to camera 0".format(camera_index))
-            camera_num = 0
-        self.video = cv2.VideoCapture(camera_num)
-        print("debugging isOpened: {}".format(self.video.isOpened()))
-
         gesture_model_path = "gesture_recognizer_hollow1.task"
         pretrain_model_path = "gesture_recognizer.task"
         landmarker_options = HandLandmarkerOptions(
@@ -218,13 +186,22 @@ class Mediapipe_HandsModule():
             num_hands=2,
             result_callback=self.set_gesture_result)
         self.recognizer = GestureRecognizer.create_from_options(gesture_options)
-
-
         return self 
 
             
 if __name__ == "__main__":
-    with Mediapipe_HandsModule("Camera_1") as hands_module:
-        while hands_module.is_open():
-            hands_module.do_loop(True)
+    with Mediapipe_HandsModule() as hands_module:
+        with VideoManager("Camera_1") as video_manager:
+            while video_manager.is_open() and hands_module.is_open():
+                frame = video_manager.capture_frame(True)
+                hands_module.recognize_frame_async(True, frame)
+                annotated_image = hands_module.annotate_image()
+                if annotated_image is None:
+                    print("skipping frame")
+                    video_manager.draw(frame)
+                else:
+                    video_manager.draw(annotated_image)     
+
+
+
 
