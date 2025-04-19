@@ -62,11 +62,11 @@ class OrientationCalculator():
 
         # 1. Calculate the vector
         vector = calculate_vector(point1, point2)
-        print(f"Vector between {point1} and {point2}: {vector}")
+        #print(f"Vector between {point1} and {point2}: {vector}")
 
         # 2. Calculate the angle in degrees
         angle_degrees = calculate_angle_degrees(vector)
-        print(f"Angle of the vector: {angle_degrees:.2f} degrees")
+        #print(f"Angle of the vector: {angle_degrees:.2f} degrees")
 
         # 3. Convert the degree to a cardinal direction
         cardinal_direction = get_cardinal_direction(angle_degrees)
