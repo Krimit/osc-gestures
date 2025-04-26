@@ -72,10 +72,11 @@ class ModelController():
         return self 
 
     def detect_hands_model(self):
+        timestamp = int(time.time() * 1000)
         if not self.is_open():
             return
         frame = self.video_manager.capture_frame(True)
-        self.hands_module.recognize_frame_async(True, frame)
+        self.hands_module.recognize_frame_async(True, frame, timestamp)
         if self.hands_module.result_is_ready():
             annotated_image = self.hands_module.annotate_image(self.hands_module.mp_image)  
             self.video_manager.draw(annotated_image)
@@ -84,10 +85,11 @@ class ModelController():
             self.video_manager.draw(frame)        
 
     def detect_face_model(self):
+        timestamp = int(time.time() * 1000)
         if not self.is_open():
             return
         frame = self.video_manager.capture_frame(True)
-        self.face_module.recognize_frame_async(True, frame)
+        self.face_module.recognize_frame_async(True, frame, timestamp)
         if self.face_module.result_is_ready():
             annotated_image = self.face_module.annotate_image(self.face_module.mp_image)  
             self.video_manager.draw(annotated_image)
@@ -96,11 +98,12 @@ class ModelController():
             self.video_manager.draw(frame)
 
     def detect_hands_and_face_models(self):
+        timestamp = int(time.time() * 1000)
         if not self.is_open():
             return
         frame = self.video_manager.capture_frame(True)
-        self.hands_module.recognize_frame_async(True, frame)
-        self.face_module.recognize_frame_async(True, frame)
+        self.hands_module.recognize_frame_async(True, frame, timestamp)
+        self.face_module.recognize_frame_async(True, frame, timestamp)
         if self.hands_module.result_is_ready() and self.face_module.result_is_ready():
             annotated_image = self.hands_module.annotate_image(self.hands_module.mp_image)
             if annotated_image is not None:
