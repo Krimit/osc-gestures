@@ -15,6 +15,8 @@ import sys
 import shortuuid
 from datetime import datetime
 
+CAMERA_NUM = 0
+
 
 # Define and parse input arguments
 parser = argparse.ArgumentParser()
@@ -57,7 +59,7 @@ savepath = os.path.join(subdirpath, example_filename)
 print("Example filename: {}".format(savepath))
 
 # Initialize webcam
-cap = cv2.VideoCapture(1)
+cap = cv2.VideoCapture(CAMERA_NUM)
 ret = cap.set(3, imW)
 ret = cap.set(4, imH)
 
