@@ -70,7 +70,7 @@ class OrientationCalculator():
 
         # 3. Convert the degree to a cardinal direction
         cardinal_direction = get_cardinal_direction(angle_degrees)
-        print(f"Cardinal direction: {cardinal_direction}")
+        #print(f"Cardinal direction: {cardinal_direction}")
         return cardinal_direction
 
 
