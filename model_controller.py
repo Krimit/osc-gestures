@@ -9,6 +9,10 @@ from video_manager import VideoManager
 from ghands_streaming import Mediapipe_HandsModule
 from gface_streaming import Mediapipe_FaceModule
 
+from pythonosc.udp_client import SimpleUDPClient
+
+client = SimpleUDPClient("127.0.0.1", 5056)
+
 
 MARGIN = 10  # pixels
 FONT_SIZE = 1
@@ -68,26 +72,32 @@ class ModelController():
         elif self.enabled_detector == Detector.HANDS:
             self.hands_module = Mediapipe_HandsModule()
         elif self.enabled_detector == Detector.FACE:
-            self.face_module = Mediapipe_FaceModule()             
+            self.face_module = Mediapipe_FaceModule()
+        frame = self.video_manager.capture_frame(True)           
         return self 
 
     def detect_hands_model(self):
+        timestamp = int(time.time() * 1000)
         if not self.is_open():
             return
+        print("capturing frame in hands")
         frame = self.video_manager.capture_frame(True)
-        self.hands_module.recognize_frame_async(True, frame)
+        self.hands_module.recognize_frame_async(True, frame, timestamp)
         if self.hands_module.result_is_ready():
-            annotated_image = self.hands_module.annotate_image(self.hands_module.mp_image)  
+            annotated_image, results_dict = self.hands_module.annotate_image(self.hands_module.mp_image)  
             self.video_manager.draw(annotated_image)
+            return results_dict.values()
         else:
             print("skipping annotation, model not ready")
-            self.video_manager.draw(frame)        
+            self.video_manager.draw(frame)
+            return []    
 
     def detect_face_model(self):
+        timestamp = int(time.time() * 1000)
         if not self.is_open():
             return
         frame = self.video_manager.capture_frame(True)
-        self.face_module.recognize_frame_async(True, frame)
+        self.face_module.recognize_frame_async(True, frame, timestamp)
         if self.face_module.result_is_ready():
             annotated_image = self.face_module.annotate_image(self.face_module.mp_image)  
             self.video_manager.draw(annotated_image)
@@ -96,11 +106,12 @@ class ModelController():
             self.video_manager.draw(frame)
 
     def detect_hands_and_face_models(self):
+        timestamp = int(time.time() * 1000)
         if not self.is_open():
             return
         frame = self.video_manager.capture_frame(True)
-        self.hands_module.recognize_frame_async(True, frame)
-        self.face_module.recognize_frame_async(True, frame)
+        self.hands_module.recognize_frame_async(True, frame, timestamp)
+        self.face_module.recognize_frame_async(True, frame, timestamp)
         if self.hands_module.result_is_ready() and self.face_module.result_is_ready():
             annotated_image = self.hands_module.annotate_image(self.hands_module.mp_image)
             if annotated_image is not None:
@@ -120,16 +131,19 @@ class ModelController():
     def detect(self):
         match self.enabled_detector:
             case Detector.HANDS:
-                self.detect_hands_model()
+                return self.detect_hands_model()
             case Detector.FACE:
-                self.detect_face_model()
+                return self.detect_face_model()
             case Detector.HANDS_AND_FACE:
-                self.detect_hands_and_face_models()
+                return self.detect_hands_and_face_models()
             case _:
                 raise Exception("Uhandled detector: " + str(enabled_detector))            
 
             
 if __name__ == "__main__":
-    with ModelController("Camera_0", Detector.HANDS_AND_FACE) as model_controller:
+    with ModelController("Camera_1", Detector.HANDS) as model_controller:
         while (model_controller.is_open()):
-            model_controller.detect()
+            osc_messages = model_controller.detect()
+            for message in osc_messages:
+                if message is not None:
+                    client.send_message("/detect", message)

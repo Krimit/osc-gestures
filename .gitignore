@@ -7,6 +7,7 @@
 training_data/
 exported_model/
 models/
+YOLOv10x_gestures.pt
 
 # Sublime stuff
 sensors.sublime-workspace

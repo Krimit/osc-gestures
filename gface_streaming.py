@@ -141,13 +141,13 @@ class Mediapipe_FaceModule():
         self.gesture_result = None
         return annotated_image
 
-    def recognize_frame_async(self, is_enabled: bool, frame):
+    def recognize_frame_async(self, is_enabled: bool, frame, timestamp_ms: int):
         if frame is None:
             return
             
         self.is_enabled = is_enabled      
 
-        self.timestamp = int(time.time() * 1000)
+        self.timestamp = timestamp_ms
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
         self.detector.detect_async(mp_image, self.timestamp)
 

@@ -119,20 +119,48 @@ class Mediapipe_HandsModule():
                     (text_x, text_y), cv2.FONT_HERSHEY_DUPLEX,
                     FONT_SIZE, HANDEDNESS_TEXT_COLOR, FONT_THICKNESS, cv2.LINE_AA)
         
-        #send hand data via OSC
-        hand = handedness[0].category_name
-        gesture_category = gesture[0].category_name
-        print("akrim category name: {}".format(gesture_category))
-        row = []
-        row += gesture_category
-        row += hand_direction
-        for idx, landmark in enumerate(hand_landmarks_proto.landmark):
-            row += [idx, landmark.x, landmark.y, landmark.z]
-            #print("handedness: {}, index: {}, {}, {}, {}".format(hand, idx, landmark.x, landmark.y, landmark.z))
-            #client.send_message("/hand", [hand, idx, landmark.x, landmark.y, landmark.z])
-        #print("hand: {}, row: {}".format(hand.lower(), row))
-        client.send_message("/hand_" + hand.lower(), row)
       return annotated_image
+
+    def stringify_detection(self, gesture_result):      
+      hand_landmarks_list = gesture_result.hand_landmarks
+      hand_world_landmark_list = gesture_result.hand_world_landmarks
+      handedness_list = gesture_result.handedness
+      gestures_list = gesture_result.gestures
+
+      result = {}
+      # Loop through the detected hands.
+      #print("akrim debugging: {}".format(gesture_result))
+      #print("handedness_list: {}. len: {}".format(handedness_list, len(handedness_list)))
+      #return "akrim"
+      for idx in range(len(handedness_list)):
+        hand_landmarks = hand_landmarks_list[idx]
+        world_landmarks = hand_world_landmark_list[idx]
+        handedness = handedness_list[idx]
+        gesture = gestures_list[idx]
+        hand_direction = OrientationCalculator.calc(world_landmarks)
+
+        hand_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
+        hand_landmarks_proto.landmark.extend([
+          landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in hand_landmarks
+        ])
+        
+        #send hand data via OSC
+        hand = handedness[0].category_name.lower()
+        gesture_category = gesture[0].category_name
+        #print("akrim category name: {}".format(gesture_category))
+        row = []
+        row.append(hand)
+        row.append(gesture_category)
+        row.append(hand_direction)
+        for i, landmark in enumerate(hand_landmarks_proto.landmark):
+            row.extend([str(i), str(landmark.x), str(landmark.y), str(landmark.z)])
+            #print("handedness: {}, index: {}, {}, {}, {}".format(hand, i, landmark.x, landmark.y, landmark.z))
+            #client.send_message("/hand", [hand, i, landmark.x, landmark.y, landmark.z])
+        #print("hand: {}, row: {}".format(hand.lower(), row))
+        #print("akrim idx: {}, prev result: {}".format(idx, result))
+        result[hand] = row
+      print("akrim result: {}".format(result))
+      return result
 
 
     def set_landmark_result(self, result: HandLandmarkerResult, output_image: mp.Image, timestamp_ms: int):
@@ -152,16 +180,18 @@ class Mediapipe_HandsModule():
         if not self.result_is_ready():
             return None
         annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), self.landmark_result, self.gesture_result)
+        result_dict = self.stringify_detection(self.gesture_result)
         self.gesture_result = None
-        return annotated_image
+        self.landmark_result = None
+        return annotated_image, result_dict
 
-    def recognize_frame_async(self, is_enabled: bool, frame):
+    def recognize_frame_async(self, is_enabled: bool, frame, timestamp_ms: int):
         if frame is None:
             return
         
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)    
         self.is_enabled = is_enabled      
-        self.timestamp = int(time.time() * 1000)
+        self.timestamp = timestamp_ms
         self.landmarker.detect_async(mp_image, self.timestamp)
         self.recognizer.recognize_async(mp_image, self.timestamp)
 
@@ -186,6 +216,7 @@ class Mediapipe_HandsModule():
             num_hands=2,
             result_callback=self.set_gesture_result)
         self.recognizer = GestureRecognizer.create_from_options(gesture_options)
+        print("Finished initiating Hands Model.")
         return self 
 
             
@@ -195,7 +226,7 @@ if __name__ == "__main__":
             while video_manager.is_open() and hands_module.is_open():
                 frame = video_manager.capture_frame(True)
                 hands_module.recognize_frame_async(True, frame)
-                annotated_image = hands_module.annotate_image()
+                annotated_image, _ = hands_module.annotate_image()
                 if annotated_image is None:
                     print("skipping frame")
                     video_manager.draw(frame)

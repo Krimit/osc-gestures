@@ -85,7 +85,15 @@ class VideoManager():
             print("Cannot convert to integer: {}. Defaulting to camera 0".format(camera_index))
             camera_num = 0
         self.video = cv2.VideoCapture(camera_num)
-        print("Video Camera Number {} isOpened: {}".format(camera_num, self.video.isOpened()))
+        while True:
+            frame = self.capture_frame(True)
+            self.draw(frame)
+            if frame is None:
+                print("frame is empty")
+            if frame is not None:
+                print("got a non-empty frame")
+                break
+        print("Video Camera Number {} isOpened: {}".format(camera_num, self.video.isOpened())) 
         return self 
 
             
