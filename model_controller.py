@@ -29,10 +29,9 @@ class ModelController():
     """
     """
 
-    def __init__(self, camera_name: str, enabled_detector: Detector):
-        self.camera_name = camera_name
+    def __init__(self, video_manager: VideoManager, enabled_detector: Detector):
+        self.video_manager = video_manager
         self.enabled_detector = enabled_detector
-        self.video_manager = None
         self.hands_module = None
         self.face_module = None
         self.mp_drawing = solutions.drawing_utils
@@ -43,7 +42,6 @@ class ModelController():
 
     def close(self):
         print("closing deps")
-        self.video_manager.close()
         if self.hands_module is not None:
             self.hands_module.close()
         if self.face_module is not None:
@@ -65,7 +63,6 @@ class ModelController():
     
 
     def init(self):
-        self.video_manager = VideoManager(self.camera_name)
         if self.enabled_detector == Detector.HANDS_AND_FACE:
             self.hands_module = Mediapipe_HandsModule()
             self.face_module = Mediapipe_FaceModule()
@@ -80,7 +77,6 @@ class ModelController():
         timestamp = int(time.time() * 1000)
         if not self.is_open():
             return
-        print("capturing frame in hands")
         frame = self.video_manager.capture_frame(True)
         self.hands_module.recognize_frame_async(True, frame, timestamp)
         if self.hands_module.result_is_ready():
@@ -141,9 +137,10 @@ class ModelController():
 
             
 if __name__ == "__main__":
-    with ModelController("Camera_1", Detector.HANDS) as model_controller:
-        while (model_controller.is_open()):
-            osc_messages = model_controller.detect()
-            for message in osc_messages:
-                if message is not None:
-                    client.send_message("/detect", message)
+    with VideoManager("Camera_1") as video_manager:
+        with ModelController(video_manager, Detector.HANDS) as model_controller:
+            while (model_controller.is_open()):
+                osc_messages = model_controller.detect()
+                for message in osc_messages:
+                    if message is not None:
+                        client.send_message("/detect", message)

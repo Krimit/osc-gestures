@@ -43,7 +43,7 @@ class VideoManager():
     def draw(self, frame):
         if frame is None:
             return
-        cv2.imshow('Show', frame)
+        cv2.imshow(self.camera_name, frame)
         
         if cv2.waitKey(1) & 0xFF == ord('q'):
             print("Closing Camera Stream")
@@ -78,6 +78,7 @@ class VideoManager():
         return frame       
 
     def init(self):
+        print("init {}".format(self.camera_name))
         camera_num_string = self.camera_name.split("_")[-1]
         try:
             camera_num = int(camera_num_string)

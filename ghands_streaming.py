@@ -153,7 +153,7 @@ class Mediapipe_HandsModule():
         row.append(gesture_category)
         row.append(hand_direction)
         for i, landmark in enumerate(hand_landmarks_proto.landmark):
-            row.extend([str(i), str(landmark.x), str(landmark.y), str(landmark.z)])
+            row.extend([i, landmark.x, landmark.y, landmark.z])
             #print("handedness: {}, index: {}, {}, {}, {}".format(hand, i, landmark.x, landmark.y, landmark.z))
             #client.send_message("/hand", [hand, i, landmark.x, landmark.y, landmark.z])
         #print("hand: {}, row: {}".format(hand.lower(), row))

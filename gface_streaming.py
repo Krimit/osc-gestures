@@ -149,7 +149,7 @@ class Mediapipe_FaceModule():
 
         self.timestamp = timestamp_ms
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
-        self.detector.detect_async(mp_image, self.timestamp)
+        self.detector.detect_async(mp_image, self.timestamp)       
 
     def init(self):
         self.timestamp = 0
