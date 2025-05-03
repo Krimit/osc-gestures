@@ -95,11 +95,13 @@ class ModelController():
         frame = self.video_manager.capture_frame(True)
         self.face_module.recognize_frame_async(True, frame, timestamp)
         if self.face_module.result_is_ready():
-            annotated_image = self.face_module.annotate_image(self.face_module.mp_image)  
+            annotated_image, results_dict = self.face_module.annotate_image(self.face_module.mp_image)  
             self.video_manager.draw(annotated_image)
+            return results_dict.values()
         else:
             print("skipping annotation, model not ready")
             self.video_manager.draw(frame)
+            return []
 
     def detect_hands_and_face_models(self):
         timestamp = int(time.time() * 1000)
@@ -109,8 +111,9 @@ class ModelController():
         self.hands_module.recognize_frame_async(True, frame, timestamp)
         self.face_module.recognize_frame_async(True, frame, timestamp)
         if self.hands_module.result_is_ready() and self.face_module.result_is_ready():
-            annotated_image = self.hands_module.annotate_image(self.hands_module.mp_image)
+            annotated_image, hands_results_dict = self.hands_module.annotate_image(self.hands_module.mp_image)
             if annotated_image is not None:
+                print("type of hands annotated_image {}".format(type(annotated_image)))
                 result_mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=annotated_image)
                 annotated_image = self.face_module.annotate_image(result_mp_image)
                 self.video_manager.draw(annotated_image)

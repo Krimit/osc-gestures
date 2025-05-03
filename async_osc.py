@@ -94,7 +94,7 @@ def handle_models(address: str, *args: List[Any]) -> None:
     command = model_instruction[1]
     detector = Detector[model_instruction[0]]
     if command == "on":
-        print("Starting the Hands model.")
+        print("Starting the {} model.".format(detector))
         detectors_to_enabled[detector] = True
     elif command == "off":
         print("Stopping the Hands model.") 

@@ -120,6 +120,8 @@ class Mediapipe_FaceModule():
       self.time_of_last_callback = time.time()
       return annotated_image    
 
+    def stringify_detection(self, detector_result): 
+        return {"akrim": "TODO"}
 
     def set_detector_result(self, result, output_image: mp.Image, timestamp_ms: int):
         print("--- loop time %s ms ---" % ((time.time() * 1000) - (timestamp_ms * 1000)))
@@ -134,12 +136,11 @@ class Mediapipe_FaceModule():
     def annotate_image(self, mp_image: mp.Image):
         if not self.result_is_ready():
             return None
-        img = mp_image
-        if img is None:
-            img = self.mp_image
-        annotated_image = self.draw_landmarks_on_image(img.numpy_view(), self.detector_result, time.time())
-        self.gesture_result = None
-        return annotated_image
+        annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), self.detector_result, time.time())
+        print("akrim type of face annotated_image {}".format(type(annotated_image)))
+        result_dict = self.stringify_detection(self.detector_result)
+        self.detector_result = None
+        return annotated_image, result_dict
 
     def recognize_frame_async(self, is_enabled: bool, frame, timestamp_ms: int):
         if frame is None:
@@ -169,12 +170,15 @@ if __name__ == "__main__":
     with Mediapipe_FaceModule() as face_module:
         with VideoManager("Camera_1") as video_manager:
             while video_manager.is_open() and face_module.is_open():
+                timestamp = int(time.time() * 1000)
                 frame = video_manager.capture_frame(True)
-                face_module.recognize_frame_async(True, frame)
-                annotated_image = face_module.annotate_image()
-                if annotated_image is None:
-                    print("skipping frame")
-                    video_manager.draw(frame)
+                face_module.recognize_frame_async(True, frame, timestamp)
+                if face_module.result_is_ready():
+                    annotated_image, results_dict = face_module.annotate_image(face_module.mp_image)  
+                    video_manager.draw(annotated_image)
+                    print(results_dict.values())
                 else:
-                    video_manager.draw(annotated_image)         
+                    print("skipping annotation, model not ready")
+                    video_manager.draw(frame)
+      
 
