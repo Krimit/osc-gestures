@@ -3,7 +3,7 @@ from pythonosc.dispatcher import Dispatcher
 from typing import List, Any
 import asyncio
 import ghands_streaming
-import setup_cameras
+from setup_cameras import CameraSetup
 from model_controller import ModelController, Detector
 #from model_controller import Detector
 
@@ -15,135 +15,129 @@ recieve_port = 5060
 send_port = 5056
 send_client = SimpleUDPClient(ip, send_port)
 
-is_hands_enabled = False
+model_controllers = {}
 
-hands_model_controller = None
+detectors_to_enabled = {}
 
-is_setup_enabled = False
+in_setup_phase = False
 
-def handle_hands(address: str, *args: List[Any]) -> None:
+camera_setup = CameraSetup()
+ 
+
+def handle_cameras(address: str, *args: List[Any]) -> None:
     print("address: {}, message: {}".format(address, args))
-    # We expect one string argument
-    if not len(args) in [0, 1]:
+    # We expect an even number of args. For "select" should be pairs of camera_name, model_type, no args for the other commands.
+    if not len(args) % 2 == 0:
         print("Unexpected dispatcher arguments for {}: {}".format(address, args))
         return
 
-    if not address in ["/controller/hands/start", "/controller/hands/stop"]:
+    # Check that address is expected
+    if not address in ["/controller/cameras/start", "/controller/cameras/stop", "/controller/cameras/select"]:
         print("Unexpected dispatcher address: {}".format(address))
         return
 
-    global is_hands_enabled
-    command = address.removeprefix("/controller/hands/")
+    global cameras_enabled
+    global camera_name_to_detector
+    global in_setup_phase
+    command = address.removeprefix("/controller/cameras/")
     if command == "start":
-        print("Enabling the Hands model.")
-        is_hands_enabled = True
+        print("Starting the cameras.")
+        camera_setup.start_all_videos()
+        in_setup_phase = True
     elif command == "stop":
-        print("Disabling the Hands model.") 
-        is_hands_enabled = False
-    else:
-        print("unrecognized command: " + command)    
-
-
-def handle_camera(address: str, *args: List[Any]) -> None:
-    print("address: {}, message: {}".format(address, args))
-    # We expect one string argument
-    if not len(args) == 0:
-        print("Unexpected dispatcher arguments for {}: {}".format(address, args))
-        return
-
-    # Check that address starts with filter
-    if not address in ["/controller/camera-setup/off", "/controller/camera-setup/on"]:
-        print("Unexpected dispatcher address: {}".format(address))
-        return
-
-    global is_setup_enabled
-    command = address.removeprefix("/controller/camera-setup/")
-    if command == "on":
-        print("Starting the Camera Setup.")
-        is_setup_enabled = True
-    elif command == "off":
-        print("Ending the Camera Setup.")
-        is_setup_enabled = False
+        print("Stopping the Cameras.")
+        in_setup_phase = False
     else:
         print("unrecognized command: " + command)
 
+def setup_selected_models(camera_name_to_detector: dict, camera_name_to_camera: dict) -> None:
+    global model_controllers
+    for camera_name, detector in camera_name_to_detector.items():
+        print("initializing models {} {}".format(camera_name, detector))
+        if camera_name is not None and camera_name != "None":
+            model_controllers[detector] = ModelController(camera_name_to_camera[camera_name], detector)
+            print("initialized model controller for dector {}".format(detector))
+    print("finished initializing model controllers for detectors {}".format(model_controllers.keys()))    
+
+
 def handle_models(address: str, *args: List[Any]) -> None:
     print("address: {}, message: {}".format(address, args))
-    # We expect one string argument
-    if not len(args) in [0, 1]:
-        print("Unexpected dispatcher arguments for {}: {}".format(address, args))
-        return
 
-    if not address in ["/controller/models/hands/on", "/controller/models/hands/off"]:
+    expected_addresses = ["/controller/models/assign", 
+    "/controller/models/HANDS/on", "/controller/models/HANDS/off", 
+    "/controller/models/FACE/on", "/controller/models/FACE/off", 
+    "/controller/models/HANDS_AND_FACE/on", "/controller/models/HANDS_AND_FACE/off"]
+
+
+    if not address in expected_addresses:
         print("Unexpected dispatcher address: {}".format(address))
         return
 
-    global is_hands_enabled
-    global hands_model_controller
+    global detectors_to_enabled
     model_instruction = address.removeprefix("/controller/models/").split("/")
-    if len(model_instruction) != 2:
-        print("Unexpected model instruction address for {}: {}".format(address, args))
+
+    if model_instruction[0] == "assign":
+        print("Selecting models to use and pairing with cameras.")
+        if not len(args) >= 2 and not len(args) % 2 == 0:
+            print("Unexpected args, must have at least one camera to use, and must have camera-model pairs.")
+            return
+        camera_name_to_detector = {args[i]: Detector[args[i+1]] for i in range(0, len(args), 2)}
+        print("got cameras to detectors: {}".format(camera_name_to_detector))
+        # None is a special camera name to mean we aren't using this model.
+        del camera_name_to_detector["None"]
+        print("will use cameras to detectors: {}".format(camera_name_to_detector))
+        detectors_to_enabled = {d : False for d in camera_name_to_detector.values()}
+        print("Initial detector states: {}".format(detectors_to_enabled))
+        camera_setup.stop_unused_cameras(camera_name_to_detector.keys())
+        setup_selected_models(camera_name_to_detector, camera_setup.video_managers)
+        return
     command = model_instruction[1]
-    if model_instruction[0] == "hands":
-        if command == "on":
-            if not len(args) == 1:
-                print("Unexpected args, missing camera name")
-            print("Starting the Hands model.")
-            hands_camera_name = args[0]
-            hands_model_controller = ModelController(hands_camera_name, Detector.HANDS)
-        elif command == "off":
-            print("Stopping the Hands model.") 
-            if hands_model_controller is not None:
-                hands_model_controller.close()
-            is_hands_enabled = False
-            hands_model_controller = None
-        else:
-            print("unrecognized command: " + command)            
+    detector = Detector[model_instruction[0]]
+    if command == "on":
+        print("Starting the {} model.".format(detector))
+        detectors_to_enabled[detector] = True
+    elif command == "off":
+        print("Stopping the Hands model.") 
+        detectors_to_enabled[detector] = False
+    else:
+        print("unrecognized command: " + command)            
 
 dispatcher = Dispatcher()
-# Hand gesture recognition
-dispatcher.map("/controller/hands*", handle_hands)
 
+# @deprecated
 # Test the cameras, to assign cameras to models.
-dispatcher.map("/controller/camera-setup*", handle_camera)
+#dispatcher.map("/controller/camera-setup*", deprecated_handle_camera)
+
+# Start the cameras, to assign cameras to models.
+dispatcher.map("/controller/cameras*", handle_cameras)
 
 # handle the model lifecycle to start or stop them
 dispatcher.map("/controller/models*", handle_models)
 
-
-
 def detect(model_controller):
     """Detection iteration"""
-    if model_controller.is_open() and is_hands_enabled:
-        print("akrim are we looping?")
+    if model_controller.is_open() and detectors_to_enabled[model_controller.enabled_detector]:
         osc_messages = model_controller.detect()
-        for message in osc_messages:
-            if message is not None:
-                send_client.send_message("/detect", message)       
+        if osc_messages is not None:
+            for message in osc_messages:
+                if message is not None:
+                    send_client.send_message("/detect", message)    
 
-
-async def hands():
+async def model(detector: Detector):
     """Main program loop"""
     while True:
-        while hands_model_controller is not None and hands_model_controller.is_open() and is_hands_enabled:
-            print("akrim are we looping?")
-            detect(hands_model_controller)  
+        while detector in model_controllers.keys() and model_controllers[detector].is_open() and detectors_to_enabled[detector]:
+            detect(model_controllers[detector])  
             await asyncio.sleep(0)
-        await asyncio.sleep(0)            
+        await asyncio.sleep(0)  
 
 
-async def camera_setup():
+async def camera_selection():
     """Main program loop"""
-    global is_setup_enabled
     while True:
-        if is_setup_enabled:
-            with setup_cameras.CameraSetup() as setup:
-                setup.start_all_videos()
-                #is_setup_enabled = False
-                while setup.is_open() and is_setup_enabled:
-                    setup.do_loop(True)
-                    await asyncio.sleep(0)   
-            print("Finished camera setup")             
+        while camera_setup.is_open() and in_setup_phase:
+            camera_setup.do_loop(True)
+            await asyncio.sleep(0)   
         await asyncio.sleep(0)
 
 
@@ -152,14 +146,7 @@ async def main():
     server = AsyncIOOSCUDPServer((ip, recieve_port), dispatcher, asyncio.get_event_loop())
     transport, protocol = await server.create_serve_endpoint()  # Create datagram endpoint and start serving
 
-    await asyncio.gather(camera_setup(), hands())
-    # loop = asyncio.get_event_loop()
-    # asyncio.set_event_loop(loop)
-    # loop.create_task(camera_setup())
-    # #loop.create_task(hands())
-    # await loop.run_forever()
-
-    # await loop_setup()  # Enter main loop of program
+    await asyncio.gather(camera_selection(), model(Detector.HANDS), model(Detector.FACE), model(Detector.HANDS_AND_FACE))
 
     transport.close()  # Clean up serve endpoint
 

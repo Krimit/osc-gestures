@@ -2,6 +2,8 @@ import cv2
 
 import numpy as np
 
+from video_manager import VideoManager
+
 from pythonosc.udp_client import SimpleUDPClient
 
 
@@ -11,14 +13,17 @@ class CameraSetup():
     def __init__(self):
         self.camera_indexes = []
         self.videos = []
+        self.video_managers = {}
         self.names = []
         self.quit = False
 
 
     def close(self):
         print("closing videos")
-        for video in self.videos:
-            video.release()
+        # for vm in video_managers:
+        #     vm.close()
+        # for video in self.videos:
+        #     video.release()
         cv2.destroyAllWindows()
         cv2.waitKey(1)
 
@@ -32,8 +37,8 @@ class CameraSetup():
         if self.quit:
             return False	
         video_opened = False
-        for video in self.videos:
-            if not(video.isOpened()):
+        for video in self.video_managers.values():
+            if not(video.is_open()):
                 return False
             else:
                 video_opened = True 
@@ -54,37 +59,51 @@ class CameraSetup():
         print("camera indexes: {}".format(arr))    
         return arr
 
-    def handle_video(self, index: int, video: cv2.VideoCapture):
+    def handle_video(self, name: str, video_manager: VideoManager):
     	# Capture frame-by-frame
-        ret, frame = video.read()
-        if not ret:
-            print("Ignoring empty frame")
-            return
+        frame = video_manager.capture_frame(True)
+        video_manager.draw(frame)
 
-        camera_name = self.names[index]
-        cv2.imshow(camera_name, frame)
+        # ret, frame = video.read()
+        # if not ret:
+        #     print("Ignoring empty frame")
+        #     return
+
+        # camera_name = self.names[index]
+        # cv2.imshow(camera_name, frame)
         
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            print("Closing Camera Stream")
-            self.quit = True
+        # if cv2.waitKey(1) & 0xFF == ord('q'):
+        #     print("Closing Camera Stream")
+        #     self.quit = True
 
     def do_loop(self, is_enabled: bool):
         if not self.is_open() and not self.quit:
             print("videos are closed, shutting down.")
             return  
-        for index, video in enumerate(self.videos):
-            self.handle_video(index, video)      
+        for name, video_manager in self.video_managers.items():
+            self.handle_video(name, video_manager)
+
+    def stop_unused_cameras(self, cameras_to_use: list[str]):
+        cameras_to_delete = [c for c in self.names if not c in cameras_to_use]
+        for to_delete in cameras_to_delete:
+            self.names.remove(to_delete)
+            self.video_managers[to_delete].close()
+            del self.video_managers[to_delete]
+
 
     def start_all_videos(self):
+        if len(self.video_managers) > 0:
+            self.__init__()
         self.camera_indexes = self.find_camera_indexes()
-        self.videos = [cv2.VideoCapture(k) for k in self.camera_indexes]
-        self.names = ["Camera_" + str(i) for i, _ in enumerate(self.videos)]
+        self.names = ["Camera_" + str(i) for i in self.camera_indexes]
+        self.video_managers = {k: VideoManager(k) for k in self.names}
 
         names = ["None"] + self.names
         
         print("sending camera names to Max: {}".format(names))
+        print("managers: {}".format(self.video_managers))
         client.send_message("/camera_names", names)
-        return self 
+        return self     
 
             
 if __name__ == "__main__":

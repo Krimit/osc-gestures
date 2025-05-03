@@ -153,7 +153,7 @@ class Mediapipe_HandsModule():
         row.append(gesture_category)
         row.append(hand_direction)
         for i, landmark in enumerate(hand_landmarks_proto.landmark):
-            row.extend([str(i), str(landmark.x), str(landmark.y), str(landmark.z)])
+            row.extend([i, landmark.x, landmark.y, landmark.z])
             #print("handedness: {}, index: {}, {}, {}, {}".format(hand, i, landmark.x, landmark.y, landmark.z))
             #client.send_message("/hand", [hand, i, landmark.x, landmark.y, landmark.z])
         #print("hand: {}, row: {}".format(hand.lower(), row))
@@ -180,6 +180,7 @@ class Mediapipe_HandsModule():
         if not self.result_is_ready():
             return None
         annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), self.landmark_result, self.gesture_result)
+        print("akrim type of hands annotated_image {}".format(type(annotated_image)))
         result_dict = self.stringify_detection(self.gesture_result)
         self.gesture_result = None
         self.landmark_result = None
@@ -221,18 +222,19 @@ class Mediapipe_HandsModule():
 
             
 if __name__ == "__main__":
+
+
+
     with Mediapipe_HandsModule() as hands_module:
         with VideoManager("Camera_1") as video_manager:
             while video_manager.is_open() and hands_module.is_open():
+                timestamp = int(time.time() * 1000)
                 frame = video_manager.capture_frame(True)
-                hands_module.recognize_frame_async(True, frame)
-                annotated_image, _ = hands_module.annotate_image()
-                if annotated_image is None:
-                    print("skipping frame")
-                    video_manager.draw(frame)
+                hands_module.recognize_frame_async(True, frame, timestamp)
+                if hands_module.result_is_ready():
+                    annotated_image, results_dict = hands_module.annotate_image(hands_module.mp_image)  
+                    video_manager.draw(annotated_image)
+                    print(results_dict.values())
                 else:
-                    video_manager.draw(annotated_image)     
-
-
-
-
+                    print("skipping annotation, model not ready")
+                    video_manager.draw(frame)
