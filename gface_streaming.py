@@ -126,28 +126,24 @@ class Mediapipe_FaceModule():
       self.time_of_last_callback = time.time()
       return annotated_image    
 
-    def stringify_detection(self, detector_result):  
+    def stringify_detection(self, detection_result):  
       face_landmarks_list = detection_result.face_landmarks
 
       # Loop through the detected faces to visualize.
+      result = {}
       for idx in range(len(face_landmarks_list)):
         categories_and_scores = [(i.category_name, i.score) for i in detection_result.face_blendshapes[idx]]
-        face_landmarks = face_landmarks_list[idx]
+        row = [x for t in categories_and_scores for x in t]
+        # print("bbb {}".format(bbb))
 
-        # Draw the face landmarks.
-        face_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
-        face_landmarks_proto.landmark.extend([
-          landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in face_landmarks
-        ])
+        # delim = "\n"
+        # categories_to_print = delim.join(map(str, categories_and_scores))
 
-        delim = "\n"
-        categories_to_print = delim.join(map(str, categories_and_scores))
-
-        #send face data via OSC
-        row = map(str, categories_and_scores)
-
-
-        return {"face": row}
+        # #send face data via OSC
+        # row = map(str, categories_to_print)
+        # print("akrim row: {}".format(categories_to_print))
+        result["face"] = row  
+      return result
 
     def set_detector_result(self, result, output_image: mp.Image, timestamp_ms: int):
         print("--- loop time %s ms ---" % ((time.time() * 1000) - (timestamp_ms * 1000)))
@@ -164,10 +160,11 @@ class Mediapipe_FaceModule():
         if not self.result_is_ready():
             return None
         annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), self.detector_result, time.time())
-        print("akrim type of face annotated_image {}".format(type(annotated_image)))
+        #print("akrim type of face annotated_image {}".format(type(annotated_image)))
         result_dict = self.stringify_detection(self.detector_result)
         self.detector_result = None
         self.log_time("annotate_image", start_time)  
+        print("result: {}". format(result_dict))
         return annotated_image, result_dict
 
     def recognize_frame_async(self, is_enabled: bool, frame, timestamp_ms: int):
@@ -196,7 +193,7 @@ class Mediapipe_FaceModule():
             
 if __name__ == "__main__":
     with Mediapipe_FaceModule() as face_module:
-        with VideoManager("Camera_0") as video_manager:
+        with VideoManager("Camera_1") as video_manager:
             while video_manager.is_open() and face_module.is_open():
                 timestamp = int(time.time() * 1000)
                 frame = video_manager.capture_frame(True)
@@ -204,7 +201,7 @@ if __name__ == "__main__":
                 if face_module.result_is_ready():
                     annotated_image, results_dict = face_module.annotate_image(face_module.mp_image)  
                     video_manager.draw(annotated_image)
-                    print(results_dict.values())
+                    print("result values: {}".format(results_dict.values()))
                 else:
                     print("skipping annotation, model not ready")
                     video_manager.draw(frame)
