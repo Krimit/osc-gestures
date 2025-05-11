@@ -2,7 +2,7 @@ from pythonosc.osc_server import AsyncIOOSCUDPServer
 from pythonosc.dispatcher import Dispatcher
 from typing import List, Any
 import asyncio
-import ghands_streaming
+import time
 from setup_cameras import CameraSetup
 from model_controller import ModelController, Detector
 #from model_controller import Detector
@@ -119,15 +119,20 @@ def detect(model_controller):
     if model_controller.is_open() and detectors_to_enabled[model_controller.enabled_detector]:
         osc_messages = model_controller.detect()
         if osc_messages is not None:
-            for message in osc_messages:
+            for key, message in osc_messages.items():
                 if message is not None:
+                    print("sending osc message: {}-{}".format(key, message))
                     send_client.send_message("/detect", message)    
 
 async def model(detector: Detector):
     """Main program loop"""
+    last_iteration = time.time()
     while True:
         while detector in model_controllers.keys() and model_controllers[detector].is_open() and detectors_to_enabled[detector]:
-            detect(model_controllers[detector])  
+            current_time = time.time()
+            #print("--- {} model time since last iteration: {} ms".format(detector, current_time * 1000 - last_iteration * 1000))
+            detect(model_controllers[detector])
+            last_iteration = time.time()
             await asyncio.sleep(0)
         await asyncio.sleep(0)  
 
@@ -136,6 +141,7 @@ async def camera_selection():
     """Main program loop"""
     while True:
         while camera_setup.is_open() and in_setup_phase:
+            print("camera setup running")
             camera_setup.do_loop(True)
             await asyncio.sleep(0)   
         await asyncio.sleep(0)
