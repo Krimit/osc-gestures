@@ -159,7 +159,7 @@ class Mediapipe_HandsModule():
         #print("hand: {}, row: {}".format(hand.lower(), row))
         #print("akrim idx: {}, prev result: {}".format(idx, result))
         result[hand] = row
-      print("akrim result: {}".format(result))
+      print("akrim hands result: {}".format(result))
       return result
 
 
@@ -180,7 +180,7 @@ class Mediapipe_HandsModule():
         if not self.result_is_ready():
             return None
         annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), self.landmark_result, self.gesture_result)
-        print("akrim type of hands annotated_image {}".format(type(annotated_image)))
+        #print("akrim type of hands annotated_image {}".format(type(annotated_image)))
         result_dict = self.stringify_detection(self.gesture_result)
         self.gesture_result = None
         self.landmark_result = None
@@ -222,11 +222,8 @@ class Mediapipe_HandsModule():
 
             
 if __name__ == "__main__":
-
-
-
     with Mediapipe_HandsModule() as hands_module:
-        with VideoManager("Camera_1") as video_manager:
+        with VideoManager("Camera_0") as video_manager:
             while video_manager.is_open() and hands_module.is_open():
                 timestamp = int(time.time() * 1000)
                 frame = video_manager.capture_frame(True)

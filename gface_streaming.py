@@ -43,6 +43,7 @@ class Mediapipe_FaceModule():
         self.is_enabled = True
         self.quit = False
         self.time_of_last_callback = None
+        self.measure_time = True
         self.init()
 
     def close(self):
@@ -62,9 +63,14 @@ class Mediapipe_FaceModule():
     def is_open(self):
         return not self.quit
 
+    def log_time(self, method_name: str, start_time: float):
+        if self.measure_time:
+            print("--- face.{} completed in {} ms ---".format(method_name, ((time.time() * 1000) - (start_time * 1000))))
+
 
     def draw_landmarks_on_image(self, rgb_image, detection_result, start_time):
-      print("--- callback gap time %s ms ---" % ((start_time * 1000) - (self.time_of_last_callback * 1000)))
+      if self.measure_time:  
+          print("--- callback gap time %s ms ---" % ((start_time * 1000) - (self.time_of_last_callback * 1000)))
       #print("akrim detection_result: {}".format(detection_result.face_blendshapes))
       # for i in detection_result.face_blendshapes:
       #   stuff.add((i.score, i.category_name))
@@ -115,13 +121,33 @@ class Mediapipe_FaceModule():
 
         #send face data via OSC
         row = map(str, categories_and_scores)
-        client.send_message("/face", row)
-      print("--- draw_landmarks_on_image %s ms ---" % ((time.time() * 1000) - (start_time * 1000)))
+        #client.send_message("/face", row)
+      self.log_time("draw_landmarks_on_image", start_time)  
       self.time_of_last_callback = time.time()
       return annotated_image    
 
-    def stringify_detection(self, detector_result): 
-        return {"akrim": "TODO"}
+    def stringify_detection(self, detector_result):  
+      face_landmarks_list = detection_result.face_landmarks
+
+      # Loop through the detected faces to visualize.
+      for idx in range(len(face_landmarks_list)):
+        categories_and_scores = [(i.category_name, i.score) for i in detection_result.face_blendshapes[idx]]
+        face_landmarks = face_landmarks_list[idx]
+
+        # Draw the face landmarks.
+        face_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
+        face_landmarks_proto.landmark.extend([
+          landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in face_landmarks
+        ])
+
+        delim = "\n"
+        categories_to_print = delim.join(map(str, categories_and_scores))
+
+        #send face data via OSC
+        row = map(str, categories_and_scores)
+
+
+        return {"face": row}
 
     def set_detector_result(self, result, output_image: mp.Image, timestamp_ms: int):
         print("--- loop time %s ms ---" % ((time.time() * 1000) - (timestamp_ms * 1000)))
@@ -134,12 +160,14 @@ class Mediapipe_FaceModule():
         return self.detector_result is not None
 
     def annotate_image(self, mp_image: mp.Image):
+        start_time = time.time()
         if not self.result_is_ready():
             return None
         annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), self.detector_result, time.time())
         print("akrim type of face annotated_image {}".format(type(annotated_image)))
         result_dict = self.stringify_detection(self.detector_result)
         self.detector_result = None
+        self.log_time("annotate_image", start_time)  
         return annotated_image, result_dict
 
     def recognize_frame_async(self, is_enabled: bool, frame, timestamp_ms: int):
@@ -168,7 +196,7 @@ class Mediapipe_FaceModule():
             
 if __name__ == "__main__":
     with Mediapipe_FaceModule() as face_module:
-        with VideoManager("Camera_1") as video_manager:
+        with VideoManager("Camera_0") as video_manager:
             while video_manager.is_open() and face_module.is_open():
                 timestamp = int(time.time() * 1000)
                 frame = video_manager.capture_frame(True)

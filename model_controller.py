@@ -113,16 +113,18 @@ class ModelController():
         if self.hands_module.result_is_ready() and self.face_module.result_is_ready():
             annotated_image, hands_results_dict = self.hands_module.annotate_image(self.hands_module.mp_image)
             if annotated_image is not None:
-                print("type of hands annotated_image {}".format(type(annotated_image)))
                 result_mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=annotated_image)
-                annotated_image = self.face_module.annotate_image(result_mp_image)
+                annotated_image, face_results_dict = self.face_module.annotate_image(result_mp_image)
                 self.video_manager.draw(annotated_image)
+                return hands_results_dict | face_results_dict # merge the prediction results
         elif self.hands_module.result_is_ready():
-            annotated_image = self.hands_module.annotate_image(self.hands_module.mp_image)  
+            annotated_image, hands_results_dict = self.hands_module.annotate_image(self.hands_module.mp_image)  
             self.video_manager.draw(annotated_image)
+            return hands_results_dict
         elif self.face_module.result_is_ready():
-            annotated_image = self.face_module.annotate_image(self.face_module.mp_image)  
+            annotated_image, face_results_dict = self.face_module.annotate_image(self.face_module.mp_image)  
             self.video_manager.draw(annotated_image)
+            return face_results_dict
         else:
             print("skipping annotation, models not ready")
             self.video_manager.draw(frame)
