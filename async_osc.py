@@ -121,8 +121,9 @@ def detect(model_controller):
         if osc_messages is not None:
             for key, message in osc_messages.items():
                 if message is not None:
-                    print("sending osc message: {}-{}".format(key, message))
-                    send_client.send_message("/detect", message)    
+                    path = "/detect/" + key
+                    print("sending osc message {}: {}".format(path, message))
+                    send_client.send_message(path, message)    
 
 async def model(detector: Detector):
     """Main program loop"""

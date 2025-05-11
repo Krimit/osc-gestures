@@ -158,8 +158,8 @@ class Mediapipe_HandsModule():
             #client.send_message("/hand", [hand, i, landmark.x, landmark.y, landmark.z])
         #print("hand: {}, row: {}".format(hand.lower(), row))
         #print("akrim idx: {}, prev result: {}".format(idx, result))
-        result[hand] = row
-      print("akrim hands result: {}".format(result))
+        result["hand/" + hand] = row
+      #print("akrim hands result: {}".format(result))
       return result
 
 

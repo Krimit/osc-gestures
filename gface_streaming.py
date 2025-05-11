@@ -142,7 +142,7 @@ class Mediapipe_FaceModule():
         # #send face data via OSC
         # row = map(str, categories_to_print)
         # print("akrim row: {}".format(categories_to_print))
-        result["face " + str(idx)] = row  
+        result["face"] = row  
       return result
 
     def set_detector_result(self, result, output_image: mp.Image, timestamp_ms: int):
