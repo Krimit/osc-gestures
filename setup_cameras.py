@@ -6,6 +6,9 @@ from video_manager import VideoManager
 
 from pythonosc.udp_client import SimpleUDPClient
 
+from model_controller import Detector
+
+
 
 client = SimpleUDPClient("127.0.0.1", 5056)
 
@@ -77,7 +80,7 @@ class CameraSetup():
         #     self.quit = True
 
     def do_loop(self, is_enabled: bool):
-        if not self.is_open() and not self.quit:
+        if not self.is_open() and self.quit:
             print("videos are closed, shutting down.")
             return  
         for name, video_manager in self.video_managers.items():
@@ -90,13 +93,30 @@ class CameraSetup():
             self.video_managers[to_delete].close()
             del self.video_managers[to_delete]
 
+    def set_camera_orientation_by_model(self, camera_name_to_detector):
+        for camera_name, detector in camera_name_to_detector.items():
+            flip = False
+            if detector == Detector.HANDS:
+                flip = True
+            self.video_managers[camera_name].set_flip(flip)
+
+
+    def create_starting_locations(self, names: list):
+        result = {}
+        xy = [0, 0]
+        for k in names:
+            result[k] = xy
+            xy = [xy[0] + 50, xy[1] + 50]
+        print("video locations will be: {}".format(result))
+        return result
 
     def start_all_videos(self):
         if len(self.video_managers) > 0:
             self.__init__()
         self.camera_indexes = self.find_camera_indexes()
         self.names = ["Camera_" + str(i) for i in self.camera_indexes]
-        self.video_managers = {k: VideoManager(k) for k in self.names}
+        positions = self.create_starting_locations(self.names)
+        self.video_managers = {k: VideoManager(k, positions[k]) for k in self.names}
 
         names = ["None"] + self.names
         

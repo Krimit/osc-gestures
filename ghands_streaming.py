@@ -16,7 +16,7 @@ client = SimpleUDPClient("127.0.0.1", 5056)
 MARGIN = 10  # pixels
 FONT_SIZE = 1
 FONT_THICKNESS = 1
-HANDEDNESS_TEXT_COLOR = (88, 205, 54) # vibrant green
+HANDEDNESS_TEXT_COLOR = (23, 26, 25) #(88, 205, 54) # vibrant green
 
 BaseOptions = mp.tasks.BaseOptions
 HandLandmarker = mp.tasks.vision.HandLandmarker
@@ -147,6 +147,8 @@ class Mediapipe_HandsModule():
         #send hand data via OSC
         hand = handedness[0].category_name.lower()
         gesture_category = gesture[0].category_name
+        if not gesture_category:
+            gesture_category = "_" # signifies that no gesture is detected. This works better in MaxMSP than trying to find an empty string.
         #print("akrim category name: {}".format(gesture_category))
         row = []
         row.append(hand)
@@ -199,8 +201,8 @@ class Mediapipe_HandsModule():
 
     def init(self):
         self.timestamp = 0
-        gesture_model_path = "gesture_recognizer_hollow1.task"
-        pretrain_model_path = "gesture_recognizer.task"
+        gesture_model_path = "models/model_training_4/gesture_recognizer.task"
+        # pretrain_model_path = "gesture_recognizer.task"
         landmarker_options = HandLandmarkerOptions(
             base_options=BaseOptions(model_asset_path='hand_landmarker.task'),
             running_mode=VisionRunningMode.LIVE_STREAM,
@@ -223,7 +225,7 @@ class Mediapipe_HandsModule():
             
 if __name__ == "__main__":
     with Mediapipe_HandsModule() as hands_module:
-        with VideoManager("Camera_0") as video_manager:
+        with VideoManager("Camera_1") as video_manager:
             while video_manager.is_open() and hands_module.is_open():
                 timestamp = int(time.time() * 1000)
                 frame = video_manager.capture_frame(True)
