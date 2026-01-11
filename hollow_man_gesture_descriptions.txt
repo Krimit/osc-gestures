@@ -6,6 +6,7 @@ fist_up
 open_spread_down
 spider_up
 duck_side
+peacock
 grab_side
 stop_down_left
 stop_down_right
@@ -19,3 +20,33 @@ grabbing
 fist
 stop
 stop inv
+
+####################
+
+Model 2 evaluation:
+
+stop_side_pinky_top | garbage!
+
+stop_side_thumb_top | garbage!
+
+fist_side_pinky_top | not reliable. Mixes up with  fist_side_thumb_top.
+
+fist_down | only works if start of fingers are visible, otherwise mixes with fist_up.
+
+fist_side_thumb_top | mostly good, mixes up with duck_side sometimes.
+
+stop | a bit finicky. Consistent when captured. Doesn't work at angle.
+
+none | confused with stop....
+
+pointing_finger | mostly perfect. Misses when right hand pointing right or left hand pointing left.
+
+open_spread_down | sometimes works. Mixes up with stop.
+
+grab_side | perfect.
+
+fist_up | Mostly good. Mixes with others when angled hand (pointing finger or fist down)
+
+duck_side | perfect. At angle confused with stop_side_thumb_top
+
+peacock | perfect. Not at angle.

@@ -11,7 +11,7 @@ from pythonosc.udp_client import SimpleUDPClient
 
 
 ip = "127.0.0.1"
-recieve_port = 5060
+recieve_port = 5061
 send_port = 5056
 send_client = SimpleUDPClient(ip, send_port)
 
@@ -89,6 +89,7 @@ def handle_models(address: str, *args: List[Any]) -> None:
         detectors_to_enabled = {d : False for d in camera_name_to_detector.values()}
         print("Initial detector states: {}".format(detectors_to_enabled))
         camera_setup.stop_unused_cameras(camera_name_to_detector.keys())
+        camera_setup.set_camera_orientation_by_model(camera_name_to_detector)
         setup_selected_models(camera_name_to_detector, camera_setup.video_managers)
         return
     command = model_instruction[1]
@@ -122,7 +123,8 @@ def detect(model_controller):
             for key, message in osc_messages.items():
                 if message is not None:
                     path = "/detect/" + key
-                    print("sending osc message {}: {}".format(path, message))
+                    #print("sending osc message {}: {}".format(path, message))
+                    print("sending osc message to {}".format(path))
                     send_client.send_message(path, message)    
 
 async def model(detector: Detector):

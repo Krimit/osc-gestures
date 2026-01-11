@@ -15,7 +15,7 @@ import sys
 import shortuuid
 from datetime import datetime
 
-CAMERA_NUM = 0
+CAMERA_NUM = 1
 
 
 # Define and parse input arguments
@@ -73,6 +73,8 @@ print('Press "q" to quit.')
 
 while True:
     hasFrame, frame = cap.read()
+    frame = cv2.flip(frame, 1) 
+    frame = cv2.flip(frame, 0) 
     cv2.imshow(winname,frame)
 
     key = cv2.waitKey(1)

@@ -13,6 +13,31 @@ from video_manager import VideoManager
 
 from pythonosc.udp_client import SimpleUDPClient
 
+#IGNORED_PREDICTIONS = []
+IGNORED_PREDICTIONS = [
+    "_neutral",
+    "cheekPuff",
+    "cheekSquintLeft",
+    "cheekSquintRight",
+    "eyeWideLeft",
+    "eyeWideRight",
+    "jawForward",
+    "mouthClose",
+    "mouthDimpleLeft",
+    "mouthDimpleRight",
+    "mouthFunnel",
+    "noseSneerLeft",
+    "noseSneerRight",
+    "eyeLookDownLeft",
+    "eyeLookDownRight",
+    "eyeLookInLeft",
+    "eyeLookInRight",
+    "eyeLookOutLeft",
+    "eyeLookOutRight",
+    "eyeLookUpLeft",
+    "eyeLookUpRight",
+]
+
 client = SimpleUDPClient("127.0.0.1", 5056)
 
 MARGIN = 10  # pixels
@@ -42,8 +67,8 @@ class Mediapipe_FaceModule():
         self.timestamp = 0
         self.is_enabled = True
         self.quit = False
-        self.time_of_last_callback = None
-        self.measure_time = True
+        self.time_of_last_callback = int(round(time.time() * 1000))
+        self.measure_time = False
         self.init()
 
     def close(self):
@@ -123,7 +148,7 @@ class Mediapipe_FaceModule():
         row = map(str, categories_and_scores)
         #client.send_message("/face", row)
       self.log_time("draw_landmarks_on_image", start_time)  
-      self.time_of_last_callback = time.time()
+      #self.time_of_last_callback = time.time()
       return annotated_image    
 
     def stringify_detection(self, detection_result):  
@@ -132,9 +157,10 @@ class Mediapipe_FaceModule():
       # Loop through the detected faces to visualize.
       result = {}
       for idx in range(len(face_landmarks_list)):
-        categories_and_scores = [(i.category_name, i.score) for i in detection_result.face_blendshapes[idx]]
+        categories_and_scores = [(i.category_name, i.score) for i in detection_result.face_blendshapes[idx] if i.category_name not in IGNORED_PREDICTIONS]
         row = [x for t in categories_and_scores for x in t]
-        # print("bbb {}".format(bbb))
+        #print("SIZE {}, categories_and_scores {}".format(len(categories_and_scores), categories_and_scores))
+        #print("row {}".format(row))
 
         # delim = "\n"
         # categories_to_print = delim.join(map(str, categories_and_scores))
@@ -146,11 +172,12 @@ class Mediapipe_FaceModule():
       return result
 
     def set_detector_result(self, result, output_image: mp.Image, timestamp_ms: int):
-        print("--- loop time %s ms ---" % ((time.time() * 1000) - (timestamp_ms * 1000)))
+        #print("--- loop time %s ms ---" % ((time.time() * 1000) - (timestamp_ms * 1000)))
+        print("--- Face model result arrived. timestamp_ms {}, time_of_last_callback {}, time since last result: {} ms ---".format(timestamp_ms, self.time_of_last_callback, (timestamp_ms - self.time_of_last_callback)))
         #print('hand landmarker result: {}'.format(result))
         self.detector_result = result
         self.mp_image = output_image
-        self.time_of_last_callback = time.time()
+        self.time_of_last_callback = int(round(time.time() * 1000))
 
     def result_is_ready(self):
         return self.detector_result is not None
@@ -163,8 +190,8 @@ class Mediapipe_FaceModule():
         #print("akrim type of face annotated_image {}".format(type(annotated_image)))
         result_dict = self.stringify_detection(self.detector_result)
         self.detector_result = None
-        self.log_time("annotate_image", start_time)  
-        print("result: {}". format(result_dict))
+        #self.log_time("annotate_image", start_time)  
+        #print("result: {}". format(result_dict))
         return annotated_image, result_dict
 
     def recognize_frame_async(self, is_enabled: bool, frame, timestamp_ms: int):
@@ -193,7 +220,7 @@ class Mediapipe_FaceModule():
             
 if __name__ == "__main__":
     with Mediapipe_FaceModule() as face_module:
-        with VideoManager("Camera_1") as video_manager:
+        with VideoManager("Camera_0") as video_manager:
             while video_manager.is_open() and face_module.is_open():
                 timestamp = int(time.time() * 1000)
                 frame = video_manager.capture_frame(True)

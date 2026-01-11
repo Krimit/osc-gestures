@@ -82,11 +82,11 @@ class ModelController():
         if self.hands_module.result_is_ready():
             annotated_image, results_dict = self.hands_module.annotate_image(self.hands_module.mp_image)  
             self.video_manager.draw(annotated_image)
-            return results_dict.values()
+            return results_dict#.values()
         else:
             print("skipping annotation, model not ready")
             self.video_manager.draw(frame)
-            return []    
+            return {}    
 
     def detect_face_model(self):
         timestamp = int(time.time() * 1000)
@@ -97,11 +97,11 @@ class ModelController():
         if self.face_module.result_is_ready():
             annotated_image, results_dict = self.face_module.annotate_image(self.face_module.mp_image)  
             self.video_manager.draw(annotated_image)
-            return results_dict.values()
+            return results_dict#.values()
         else:
             print("skipping annotation, model not ready")
             self.video_manager.draw(frame)
-            return []
+            return {}
 
     def detect_hands_and_face_models(self):
         timestamp = int(time.time() * 1000)

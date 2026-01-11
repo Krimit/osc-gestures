@@ -23,21 +23,21 @@ def calculate_angle_degrees(vector):
 def get_cardinal_direction(degrees):
   """Converts an angle in degrees to a cardinal direction."""
   if 337.5 <= degrees < 360 or 0 <= degrees < 22.5:
-    return "N"
-  elif 22.5 <= degrees < 67.5:
-    return "NE"
-  elif 67.5 <= degrees < 112.5:
     return "E"
-  elif 112.5 <= degrees < 157.5:
+  elif 22.5 <= degrees < 67.5:
     return "SE"
-  elif 157.5 <= degrees < 202.5:
+  elif 67.5 <= degrees < 112.5:
     return "S"
-  elif 202.5 <= degrees < 247.5:
+  elif 112.5 <= degrees < 157.5:
     return "SW"
-  elif 247.5 <= degrees < 292.5:
+  elif 157.5 <= degrees < 202.5:
     return "W"
-  elif 292.5 <= degrees < 337.5:
+  elif 202.5 <= degrees < 247.5:
     return "NW"
+  elif 247.5 <= degrees < 292.5:
+    return "N"
+  elif 292.5 <= degrees < 337.5:
+    return "NE"
   else:
     return "Invalid Angle"
 
