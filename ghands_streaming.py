@@ -9,9 +9,6 @@ import numpy as np
 from orientation_calculator import OrientationCalculator
 from video_manager import VideoManager
 
-from pythonosc.udp_client import SimpleUDPClient
-
-client = SimpleUDPClient("127.0.0.1", 5056)
 
 MARGIN = 10  # pixels
 FONT_SIZE = 1
@@ -29,12 +26,6 @@ GestureRecognizer = mp.tasks.vision.GestureRecognizer
 GestureRecognizerResult = mp.tasks.vision.GestureRecognizerResult
 
 
-
-
-#@markdown To better demonstrate the Hand Landmarker API, we have created a set of visualization tools that will be used in this colab. These will draw the landmarks on a detect person, as well as the expected connections between those markers.
-from mediapipe import solutions
-from mediapipe.framework.formats import landmark_pb2
-import numpy as np
 
 class Mediapipe_HandsModule():
     """
@@ -157,7 +148,6 @@ class Mediapipe_HandsModule():
         for i, landmark in enumerate(hand_landmarks_proto.landmark):
             row.extend([i, landmark.x, landmark.y, landmark.z])
             #print("handedness: {}, index: {}, {}, {}, {}".format(hand, i, landmark.x, landmark.y, landmark.z))
-            #client.send_message("/hand", [hand, i, landmark.x, landmark.y, landmark.z])
         #print("hand: {}, row: {}".format(hand.lower(), row))
         #print("akrim idx: {}, prev result: {}".format(idx, result))
         result["hand/" + hand] = row
