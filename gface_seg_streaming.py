@@ -43,21 +43,29 @@ FONT_SIZE = 1
 FONT_THICKNESS = 1
 HANDEDNESS_TEXT_COLOR = (88, 205, 54) # vibrant green
 
-BaseOptions = mp.tasks.BaseOptions
+# parameters for the point cloud information
+BODY_DEPTH_LEVEL = 60
+FACE_INTENSITY = 180
+BLUR_AMOUNT = (45, 45)
+
+ImageSegmenter = mp.tasks.vision.ImageSegmenter
+ImageSegmenterOptions = mp.tasks.vision.ImageSegmenterOptions
 VisionRunningMode = mp.tasks.vision.RunningMode
+BaseOptions = mp.tasks.BaseOptions
 
 
-
-class Mediapipe_FaceModule():
+class Mediapipe_FaceSegModule():
     """
 
     """
 
     def __init__(self):
         self.mp_drawing = solutions.drawing_utils
-        self.detector_result = None
         self.video = None
+        self.detector_result = None
         self.detector = None
+        self.segmentation_result = None
+        self.segmenter = None
         self.timestamp = 0
         self.is_enabled = True
         self.quit = False
@@ -85,6 +93,126 @@ class Mediapipe_FaceModule():
     def log_time(self, method_name: str, start_time: float):
         if self.measure_time:
             print("--- face.{} completed in {} ms ---".format(method_name, ((time.time() * 1000) - (start_time * 1000))))
+
+
+
+    # def paint_face_depth(image_shape, face_landmarks):
+    #     """
+    #     Takes existing landmarks and paints a depth map.
+    #     image_shape: (height, width)
+    #     face_landmarks: The list of landmarks from your EXISTING model
+    #     """
+    #     h, w = image_shape[:2]
+        
+    #     # Create black canvas (Float32 for smooth gradients)
+    #     depth_canvas = np.zeros((h, w), dtype=np.float32)
+        
+    #     # CONFIG
+    #     Z_SCALE = 150  # Pop out intensity
+    #     DOT_SIZE = 20  # Size of each 'light'
+        
+    #     # If using standard MediaPipe "NormalizedLandmarkList"
+    #     # We iterate directly over .landmark
+    #     for lm in face_landmarks.landmark:
+    #         x, y = int(lm.x * w), int(lm.y * h)
+            
+    #         # Invert Z: MediaPipe Z is negative for "close", positive for "far"
+    #         # We want Close = Bright
+    #         z = (lm.z * -1) + 0.1 
+    #         brightness = max(0.0, z * Z_SCALE)
+            
+    #         # Draw the dot
+    #         cv2.circle(depth_canvas, (x, y), DOT_SIZE, brightness, -1)
+
+    #     # Blur to create surface
+    #     depth_canvas = cv2.GaussianBlur(depth_canvas, (45, 45), 0)
+        
+    #     # Convert to 0-255 format
+    #     return np.clip(depth_canvas, 0, 255).astype(np.uint8)
+
+    def paint_face_depth(self, image_shape, detection_result):
+        """
+        Helper function: Converts YOUR existing landmarks into a depth texture.
+        """
+        h, w = image_shape[:2]
+        depth_canvas = np.zeros((h, w), dtype=np.float32)
+        
+        for face in detection_result.face_landmarks:
+            for lm in face:
+                x, y = int(lm.x * w), int(lm.y * h)
+                z_metric = (lm.z * -1) + 0.1
+                brightness = max(0.0, z_metric * FACE_INTENSITY)
+
+                # Draw large soft circles
+                cv2.circle(depth_canvas, (x, y), 15, brightness, -1)
+
+        return depth_canvas
+
+
+
+    def create_alpha_depth(self, rgb_image, frame, segmentation_result, detection_result):
+        h, w, c = frame.shape
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        #timestamp = int(cap.get(cv2.CAP_PROP_POS_MSEC))
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+
+        confidence_mask = segmentation_result.confidence_masks[0].numpy_view()
+        # Turn it into our "Base Depth Layer"
+        # 1.0 confidence becomes BODY_DEPTH_LEVEL (e.g., 60)
+        body_layer = (confidence_mask * BODY_DEPTH_LEVEL).astype(np.float32) 
+        
+        face_layer = np.zeros((h, w), dtype=np.float32)
+
+        if detection_result.face_landmarks:
+            face_layer = self.paint_face_depth((h, w), detection_result)
+
+        face_layer_blurred = cv2.GaussianBlur(face_layer, BLUR_AMOUNT, 0)
+        
+        combined_map = cv2.add(body_layer, face_layer_blurred)
+
+        combined_map[confidence_mask < 0.1] = 0
+
+        final_alpha = np.clip(combined_map, 0, 255).astype(np.uint8)
+        b, g, r = cv2.split(frame)
+        rgba_frame = cv2.merge([b, g, r, final_alpha])   
+
+        return rgba_frame
+
+
+    def draw_segmentation(self, rgb_image, frame, segmentation_result):
+        mask = segmentation_result.confidence_masks[0].numpy_view()
+
+        frame_bgr = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR)
+
+        # 3. Create a visual representation of the mask
+        # Option A: Simple grayscale (multiply by factor if labels are small, e.g., 0 and 1)
+        visual_mask = (mask * 255).astype(np.uint8)
+        
+        # Option B: Colored overlay (e.g., highlights the object in green)
+        colored_mask = np.zeros_like(frame_bgr)
+        colored_mask[mask > 0] = [0, 255, 0] # Green for detected segments
+        
+        # Blend the mask with the original frame
+        overlay = cv2.addWeighted(frame_bgr, 0.6, colored_mask, 0.4, 0)
+
+        return visual_mask
+        #cv2.imshow('Segmentation Mask', visual_mask)
+        #cv2.imshow('Segmentation Overlay', overlay)
+
+        # Apply mask to video immediately
+        # Put the confidence map into the Alpha channel of the original video
+        
+        # Resize mask to match video frame (if needed, usually they match)
+        # But normally MediaPipe output matches input size
+        
+        b, g, r = cv2.split(frame)
+        
+        # Scale confidence (0.0-1.0) to Alpha (0-255)
+        alpha = (mask * 255).astype(np.uint8)
+        
+        # Create standard RGBA texture
+        rgba_frame = cv2.merge([b, g, r, alpha])
+        return visual_mask
 
 
     def draw_landmarks_on_image(self, rgb_image, detection_result, start_time):
@@ -172,32 +300,38 @@ class Mediapipe_FaceModule():
         self.mp_image = output_image
         self.time_of_last_callback = int(round(time.time() * 1000))
 
-    def result_is_ready(self):
-        return self.detector_result is not None
+    def set_segmentation_result(self, result, output_image: mp.Image, timestamp_ms: int):
+        print("--- Segmentation model result arrived. timestamp_ms {}, time_of_last_callback {}, time since last result: {} ms ---".format(timestamp_ms, self.time_of_last_callback, (timestamp_ms - self.time_of_last_callback)))
+        self.segmentation_result = result
+        self.mp_image = output_image
 
-    def annotate_image(self, mp_image: mp.Image):
-        start_time = time.time()
+    def result_is_ready(self):
+        return self.detector_result is not None and self.segmentation_result is not None
+
+    def process_image(self, mp_image: mp.Image, frame):
         if not self.result_is_ready():
+            print("results not ready!")
             return None
         annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), self.detector_result, time.time())
-        #print("akrim type of face annotated_image {}".format(type(annotated_image)))
+        alpha_depth_image = self.create_alpha_depth(mp_image.numpy_view(), frame, self.segmentation_result, self.detector_result)
+        self.segmentation_result = None
         result_dict = self.stringify_detection(self.detector_result)
-        self.detector_result = None
-        #self.log_time("annotate_image", start_time)  
-        #print("result: {}". format(result_dict))
-        return annotated_image, result_dict
+        return annotated_image, alpha_depth_image, result_dict        
 
     def recognize_frame_async(self, is_enabled: bool, frame, timestamp_ms: int):
         if frame is None:
             return
-            
+        
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)  
+
         self.is_enabled = is_enabled      
-
         self.timestamp = timestamp_ms
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
-        self.detector.detect_async(mp_image, self.timestamp)       
+        self.segmenter.segment_async(mp_image, self.timestamp)           
+        self.detector.detect_async(mp_image, self.timestamp)
 
-    def init(self):
+
+    def init_face(self):
         self.timestamp = 0
 
         base_options = BaseOptions(model_asset_path='face_landmarker_v2_with_blendshapes.task')
@@ -208,22 +342,48 @@ class Mediapipe_FaceModule():
             output_facial_transformation_matrixes=False,
             num_faces=1)
         self.detector = vision.FaceLandmarker.create_from_options(options)
+        print("Finished initiating face detector Model.")
         return self 
+
+    def init_segmenter(self):
+        self.timestamp = 0
+
+        options = ImageSegmenterOptions(
+            base_options=BaseOptions(model_asset_path="models/selfie_segmentation_landscape.tflite"),
+            running_mode=VisionRunningMode.LIVE_STREAM,
+            output_category_mask=False,
+            output_confidence_masks=True, # Soft edges for point cloud
+            result_callback=self.set_segmentation_result
+        )
+
+        self.segmenter = ImageSegmenter.create_from_options(options)
+        print("Finished initiating Segmentation Model.")
+        return self 
+
+    def init(self):
+        self.init_face()
+        self.init_segmenter()
+        return self
 
             
 if __name__ == "__main__":
-    with Mediapipe_FaceModule() as face_module:
+    with Mediapipe_FaceSegModule() as face_module:
         with VideoManager("Camera_0") as video_manager:
             while video_manager.is_open() and face_module.is_open():
                 timestamp = int(time.time() * 1000)
                 frame = video_manager.capture_frame(True)
                 face_module.recognize_frame_async(True, frame, timestamp)
                 if face_module.result_is_ready():
-                    annotated_image, results_dict = face_module.annotate_image(face_module.mp_image)  
-                    video_manager.draw(annotated_image)
+                    annotated_image, alpha_depth_image, results_dict = face_module.process_image(face_module.mp_image, frame)  
+                    b, g, r, a = cv2.split(alpha_depth_image)
+                    rgb_view = cv2.merge([b, g, r])
+                    alpha_view = cv2.cvtColor(a, cv2.COLOR_GRAY2BGR)
+                    debug_image = np.hstack((rgb_view, alpha_view))
+                    debug_image = np.hstack((annotated_image, debug_image))
+                    video_manager.draw(debug_image)
                     print("result values: {}".format(results_dict.values()))
                 else:
                     print("skipping annotation, model not ready")
-                    video_manager.draw(frame)
+                    #video_manager.draw(frame)
       
 

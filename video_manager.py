@@ -81,7 +81,7 @@ class VideoManager():
         self.is_enabled = is_enabled                
         if not(is_enabled):
             #print("loop - hands disabled")
-            cv2.imshow('Show', frame)
+            #cv2.imshow('Show', frame)
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 print("Closing Camera Stream")
                 self.quit = True
@@ -128,7 +128,7 @@ class VideoManager():
         cv2.moveWindow(self.camera_name, self.screen_xy[0], self.screen_xy[1])
         while True:
             frame = self.capture_frame(True)
-            self.draw(frame)
+            #self.draw(frame)
             if frame is None:
                 print("frame is empty, waiting")
             if frame is not None:
