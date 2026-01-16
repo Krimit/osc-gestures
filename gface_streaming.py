@@ -175,14 +175,16 @@ class Mediapipe_FaceModule():
     def result_is_ready(self):
         return self.detector_result is not None
 
-    def annotate_image(self, mp_image: mp.Image):
+    def annotate_image(self, frame):
         start_time = time.time()
         if not self.result_is_ready():
             return None
-        annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), self.detector_result, time.time())
-        #print("akrim type of face annotated_image {}".format(type(annotated_image)))
-        result_dict = self.stringify_detection(self.detector_result)
+        local_res = self.detector_result
         self.detector_result = None
+        annotated_image = self.draw_landmarks_on_image(frame, local_res, time.time())
+        #annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), local_res, time.time())
+        #print("akrim type of face annotated_image {}".format(type(annotated_image)))
+        result_dict = self.stringify_detection(local_res)
         #self.log_time("annotate_image", start_time)  
         #print("result: {}". format(result_dict))
         return annotated_image, result_dict
@@ -194,13 +196,16 @@ class Mediapipe_FaceModule():
         self.is_enabled = is_enabled      
 
         self.timestamp = timestamp_ms
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
+        self.frame = frame
+        rgba_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGBA, data=rgba_frame)
+        #mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
         self.detector.detect_async(mp_image, self.timestamp)       
 
     def init(self):
         self.timestamp = 0
 
-        base_options = BaseOptions(model_asset_path='face_landmarker_v2_with_blendshapes.task')
+        base_options = BaseOptions(model_asset_path='face_landmarker_v2_with_blendshapes.task',  delegate=BaseOptions.Delegate.GPU)
         options = vision.FaceLandmarkerOptions(base_options=base_options,
             running_mode=VisionRunningMode.LIVE_STREAM,
             result_callback=self.set_detector_result,
@@ -219,7 +224,7 @@ if __name__ == "__main__":
                 frame = video_manager.capture_frame(True)
                 face_module.recognize_frame_async(True, frame, timestamp)
                 if face_module.result_is_ready():
-                    annotated_image, results_dict = face_module.annotate_image(face_module.mp_image)  
+                    annotated_image, results_dict = face_module.annotate_image(face_module.frame)  
                     video_manager.draw(annotated_image)
                     print("result values: {}".format(results_dict.values()))
                 else:

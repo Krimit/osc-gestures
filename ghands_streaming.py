@@ -168,10 +168,10 @@ class Mediapipe_HandsModule():
     def result_is_ready(self):
         return self.gesture_result is not None
 
-    def annotate_image(self, mp_image: mp.Image):
+    def annotate_image(self, frame):
         if not self.result_is_ready():
             return None
-        annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), self.landmark_result, self.gesture_result)
+        annotated_image = self.draw_landmarks_on_image(frame, self.landmark_result, self.gesture_result)
         #print("akrim type of hands annotated_image {}".format(type(annotated_image)))
         result_dict = self.stringify_detection(self.gesture_result)
         self.gesture_result = None
@@ -182,9 +182,12 @@ class Mediapipe_HandsModule():
         if frame is None:
             return
         
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)    
+        rgba_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGBA, data=rgba_frame)
+        #mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)    
         self.is_enabled = is_enabled      
         self.timestamp = timestamp_ms
+        self.frame = frame
         self.landmarker.detect_async(mp_image, self.timestamp)
         self.recognizer.recognize_async(mp_image, self.timestamp)
 
@@ -194,7 +197,7 @@ class Mediapipe_HandsModule():
         gesture_model_path = "models/model_training_4/gesture_recognizer.task"
         # pretrain_model_path = "gesture_recognizer.task"
         landmarker_options = HandLandmarkerOptions(
-            base_options=BaseOptions(model_asset_path='hand_landmarker.task'),
+            base_options=BaseOptions(model_asset_path='hand_landmarker.task', delegate=BaseOptions.Delegate.GPU),
             running_mode=VisionRunningMode.LIVE_STREAM,
             num_hands=2,
             min_hand_detection_confidence= 0.5,
@@ -221,7 +224,7 @@ if __name__ == "__main__":
                 frame = video_manager.capture_frame(True)
                 hands_module.recognize_frame_async(True, frame, timestamp)
                 if hands_module.result_is_ready():
-                    annotated_image, results_dict = hands_module.annotate_image(hands_module.mp_image)  
+                    annotated_image, results_dict = hands_module.annotate_image(hands_module.frame)  
                     video_manager.draw(annotated_image)
                     print(results_dict.values())
                 else:

@@ -14,12 +14,6 @@ from pythonosc.udp_client import SimpleUDPClient
 client = SimpleUDPClient("127.0.0.1", 5056)
 
 
-MARGIN = 10  # pixels
-FONT_SIZE = 1
-FONT_THICKNESS = 1
-HANDEDNESS_TEXT_COLOR = (88, 205, 54) # vibrant green
-
-
 class Detector(Enum):
     HANDS = 1
     FACE = 2
@@ -38,6 +32,7 @@ class ModelController():
         self.timestamp = 0
         self.is_enabled = True
         self.quit = False
+        self.in_progress = False
         self.init()
 
     def close(self):
@@ -74,43 +69,58 @@ class ModelController():
         return self 
 
     def detect_hands_model(self):
-        timestamp = int(time.time() * 1000)
+        time_of_last_callback = self.timestamp
+        self.timestamp = int(time.time() * 1000)
         if not self.is_open():
             return
-        frame = self.video_manager.capture_frame(True)
-        self.hands_module.recognize_frame_async(True, frame, timestamp)
+        if not self.in_progress:
+            print("--- ready to ask model for new prediction. time since last result: {} ms ---".format((self.timestamp - time_of_last_callback)))
+            frame = self.video_manager.capture_frame(True)
+            self.hands_module.recognize_frame_async(True, frame, self.timestamp)
+            self.in_progress = True
         if self.hands_module.result_is_ready():
-            annotated_image, results_dict = self.hands_module.annotate_image(self.hands_module.mp_image)  
+            print("--- ready to use model result. time since last result: {} ms ---".format((self.timestamp - time_of_last_callback)))
+            annotated_image, results_dict = self.hands_module.annotate_image(self.hands_module.frame)  
+            self.in_progress = False
             self.video_manager.draw(annotated_image)
-            return results_dict #.values()
+            return results_dict
         else:
             print("skipping annotation, model not ready")
-            self.video_manager.draw(frame)
+            #self.video_manager.draw(frame)
             return {}    
 
     def detect_face_model(self):
-        timestamp = int(time.time() * 1000)
+        time_of_last_callback = self.timestamp
+        self.timestamp = int(time.time() * 1000)
         if not self.is_open():
             return
-        frame = self.video_manager.capture_frame(True)
-        self.face_module.recognize_frame_async(True, frame, timestamp)
+        if not self.in_progress:
+            print("--- ready to ask model for new prediction. time since last result: {} ms ---".format((self.timestamp - time_of_last_callback)))
+            frame = self.video_manager.capture_frame(True)
+            self.face_module.recognize_frame_async(True, frame, self.timestamp)
+            self.in_progress = True
         if self.face_module.result_is_ready():
-            annotated_image, results_dict = self.face_module.annotate_image(self.face_module.mp_image)  
+            print("--- ready to use model result. time since last result: {} ms ---".format((self.timestamp - time_of_last_callback)))            
+            self.in_progress = False
+            annotated_image, results_dict = self.face_module.annotate_image(self.face_module.frame)  
             self.video_manager.draw(annotated_image)
-            return results_dict#.values()
+            return results_dict
         else:
             print("skipping annotation, model not ready")
-            self.video_manager.draw(frame)
+            #self.video_manager.draw(frame)
             return {}
 
     def detect_hands_and_face_models(self):
-        timestamp = int(time.time() * 1000)
+        self.timestamp = int(time.time() * 1000)
         if not self.is_open():
             return
         frame = self.video_manager.capture_frame(True)
-        self.hands_module.recognize_frame_async(True, frame, timestamp)
-        self.face_module.recognize_frame_async(True, frame, timestamp)
+        if not self.in_progress:
+            self.hands_module.recognize_frame_async(True, frame, self.timestamp)
+            self.face_module.recognize_frame_async(True, frame, self.timestamp)
+            self.in_progress = True
         if self.hands_module.result_is_ready() and self.face_module.result_is_ready():
+            self.in_progress = False
             annotated_image, hands_results_dict = self.hands_module.annotate_image(self.hands_module.mp_image)
             if annotated_image is not None:
                 result_mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=annotated_image)
