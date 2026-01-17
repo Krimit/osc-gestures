@@ -30,9 +30,10 @@ class MetalVideoBridge:
         if frame.shape[2] == 3:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2BGRA)
 
-        # 2. Create the Texture ONLY ONCE
-        # if self.texture is None:
-        #     self.texture = self.device.newTextureWithDescriptor_(self.texture_descriptor)
+        # Ensure the array is stored in one solid block of memory
+        # 'ascontiguousarray' does NOTHING if it's already contiguous (zero cost)
+        if not frame.flags['C_CONTIGUOUS']:
+            frame = np.ascontiguousarray(frame)
         
         # 3. Update the existing texture's memory
         # This copies new pixels into the OLD texture object. Zero allocation.
@@ -44,7 +45,7 @@ class MetalVideoBridge:
         self.texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow_(
             region,
             0,
-            frame.tobytes(),
+            frame.data,
             bytes_per_row
         )
         
