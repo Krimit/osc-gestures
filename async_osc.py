@@ -14,6 +14,7 @@ from pythonosc.udp_client import SimpleUDPClient
 
 from metal_video_bridge import MetalVideoBridge
 from syphon import SyphonMetalServer
+import objc
  
  # Shared executor
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=16)
@@ -30,6 +31,7 @@ detectors_to_enabled = {}
 latest_detections = {}
 
 syphon_servers = {}
+syphon_bridges = {}
 
 in_setup_phase = False
 
@@ -307,16 +309,18 @@ async def gui_manager():
         await asyncio.sleep(0.01) # ~60 FPS refresh
 
 def publish_to_metal(bridge, syphon_server, frame, detection):
-    #Convert CPU Array -> GPU Texture
-    mtl_texture = bridge.numpy_to_metal(frame)
-    #Publish the Texture
-    syphon_server.publish_frame_texture(mtl_texture)
+    with objc.autorelease_pool():
+        #Convert CPU Array -> GPU Texture
+        mtl_texture = bridge.numpy_to_metal(frame)
+        #Publish the Texture
+        syphon_server.publish_frame_texture(mtl_texture)
 
 
 async def syphon_manager():
     global latest_detections
     global syphon_servers
-    bridge = MetalVideoBridge(W, H)
+    global syphon_bridges
+
     loop = asyncio.get_running_loop()
 
     if SEND_TO_TD:
@@ -324,16 +328,21 @@ async def syphon_manager():
             current_names = sorted(list(latest_detections.keys()))
             for name in current_names:
                 detection = latest_detections[name]
+                if detection.name not in syphon_bridges:
+                    # Initialize bridge with specific camera dimensions if needed
+                    syphon_bridges[detection.name] = MetalVideoBridge(W, H)
+
+
                 if detection.name not in syphon_servers:
                     server_name = "HollowManVideo_" + detection.name
-                    syphon_servers[detection.name] = SyphonMetalServer(server_name, device=bridge.device)
+                    syphon_servers[detection.name] = SyphonMetalServer(server_name, device=syphon_bridges[detection.name].device)
                     print("Created new SyphonMetalServer: {}".format(server_name))
 
                 frame = detection.original_frame
                 if frame is None:
                     continue
 
-                await loop.run_in_executor(executor, publish_to_metal, bridge, syphon_servers[detection.name], frame, detection)
+                await loop.run_in_executor(executor, publish_to_metal, syphon_bridges[detection.name], syphon_servers[detection.name], frame, detection)
             await asyncio.sleep(0.016) # ~60 FPS refresh
 
 async def main():
