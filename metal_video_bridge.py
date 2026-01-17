@@ -26,7 +26,13 @@ class MetalVideoBridge:
         # Allow CPU to write to this texture
         self.texture_descriptor.setUsage_(Metal.MTLTextureUsageShaderRead)
 
-    def numpy_to_metal(self, frame_bgra):
+    def numpy_to_metal(self, frame):
+        # Safety Check: Syphon/Metal requires 4 channels (BGRA)
+        # If the frame is standard OpenCV BGR, convert it here
+        if frame.shape[2] == 3:
+            # OpenCV defaults to BGR. We convert to BGRA.
+            frame_bgra = cv2.cvtColor(frame, cv2.COLOR_BGR2BGRA)
+
         """Converts a numpy array (BGRA) to a generic Metal Texture"""
         # Create a new empty texture on the GPU
         texture = self.device.newTextureWithDescriptor_(self.texture_descriptor)
