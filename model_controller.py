@@ -11,6 +11,7 @@ from gface_streaming import Mediapipe_FaceModule
 
 import asyncio
 import concurrent.futures
+import objc
 
 from pythonosc.udp_client import SimpleUDPClient
 

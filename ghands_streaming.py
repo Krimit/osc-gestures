@@ -16,9 +16,6 @@ FONT_THICKNESS = 1
 HANDEDNESS_TEXT_COLOR = (23, 26, 25) #(88, 205, 54) # vibrant green
 
 BaseOptions = mp.tasks.BaseOptions
-HandLandmarker = mp.tasks.vision.HandLandmarker
-HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
-HandLandmarkerResult = mp.tasks.vision.HandLandmarkerResult
 VisionRunningMode = mp.tasks.vision.RunningMode
 
 GestureRecognizerOptions = mp.tasks.vision.GestureRecognizerOptions
@@ -35,10 +32,8 @@ class Mediapipe_HandsModule():
 
     def __init__(self):
         self.mp_drawing = solutions.drawing_utils
-        self.landmark_result = None
         self.gesture_result = None
         self.mp_image = None
-        self.landmarker = None
         self.recognizer = None
         self.timestamp = 0
         self.time_of_last_callback = int(round(time.time() * 1000))
@@ -48,11 +43,9 @@ class Mediapipe_HandsModule():
 
     def close(self):
         print("closing hands model")
-        self.landmarker.close()
         self.recognizer.close()
 
     def __enter__(self):
-        self.landmarker.__enter__()
         self.recognizer.__enter__()
         return self
 
@@ -60,7 +53,7 @@ class Mediapipe_HandsModule():
         self.close()
 
     def __str__(self):
-        return "timestamp: {}, landmarker: {}, gesture_result: {}, landmark_result: {}".format(self.timestamp, self.landmarker, self.gesture_result, self.landmark_result)
+        return "timestamp: {}, gesture_result: {}, landmark_result: {}".format(self.timestamp, self.gesture_result)
 
     def is_open(self):
         return not self.quit   
@@ -73,13 +66,7 @@ class Mediapipe_HandsModule():
             return round(data, precision)
         return data    
 
-    def draw_landmarks_on_image(self, rgb_image, landmark_result, gesture_result):
-      #print("akrim gestures: {}".format(gesture_result.gestures))
-      
-      # TODO: Can we get rid of the landmark model entirely?
-      #hand_landmarks_list = landmark_result.hand_landmarks
-      #handedness_list = landmark_result.handedness
-      
+    def draw_landmarks_on_image(self, rgb_image, gesture_result):
       hand_landmarks_list = gesture_result.hand_landmarks
       hand_world_landmark_list = gesture_result.hand_world_landmarks
       handedness_list = gesture_result.handedness
@@ -162,18 +149,8 @@ class Mediapipe_HandsModule():
         result["hand/" + hand] = row
       #print("akrim hands result: {}".format(result))
       return result
-
-
-    def set_landmark_result(self, result: HandLandmarkerResult, output_image: mp.Image, timestamp_ms: int):
-        #print('hand landmarker result: {}'.format(result))
-        self.landmark_result = result
-        self.mp_image = output_image
-        if self.time_of_last_callback % 10 == 0:
-            print("--- Hand landmark model result arrived. time since last result: {} ms ---".format((timestamp_ms - self.time_of_last_callback)))
-
     
     def set_gesture_result(self, result: GestureRecognizerResult, output_image: mp.Image, timestamp_ms: int):
-        #print('hand landmarker result: {}'.format(result))
         self.gesture_result = result
         self.mp_image = output_image
         if self.time_of_last_callback % 10 == 0:
@@ -187,11 +164,10 @@ class Mediapipe_HandsModule():
     def annotate_image(self, frame, camera_name):
         if not self.result_is_ready():
             return None
-        annotated_image = self.draw_landmarks_on_image(frame, self.landmark_result, self.gesture_result)
+        annotated_image = self.draw_landmarks_on_image(frame, self.gesture_result)
         #print("akrim type of hands annotated_image {}".format(type(annotated_image)))
         result_dict = self.stringify_detection(self.gesture_result)
         self.gesture_result = None
-        self.landmark_result = None
         # Add text overlay to the individual frame
         label = f"{camera_name}"
         cv2.putText(annotated_image, label, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 3)
@@ -209,7 +185,6 @@ class Mediapipe_HandsModule():
         self.is_enabled = is_enabled      
         self.timestamp = timestamp_ms
         self.frame = frame
-        self.landmarker.detect_async(mp_image, self.timestamp)
         self.recognizer.recognize_async(mp_image, self.timestamp)
 
 
@@ -217,15 +192,6 @@ class Mediapipe_HandsModule():
         self.timestamp = 0
         gesture_model_path = "models/model_training_4/gesture_recognizer.task"
         # pretrain_model_path = "gesture_recognizer.task"
-        landmarker_options = HandLandmarkerOptions(
-            base_options=BaseOptions(model_asset_path='hand_landmarker.task', delegate=BaseOptions.Delegate.CPU),
-            running_mode=VisionRunningMode.LIVE_STREAM,
-            num_hands=2,
-            min_hand_detection_confidence= 0.5,
-            min_hand_presence_confidence= 0.5,
-            min_tracking_confidence = 0.5,
-            result_callback=self.set_landmark_result)
-        self.landmarker = HandLandmarker.create_from_options(landmarker_options)
 
         gesture_options = GestureRecognizerOptions(
             base_options=BaseOptions(model_asset_path=gesture_model_path),
@@ -242,12 +208,14 @@ if __name__ == "__main__":
         with VideoManager("Camera_1") as video_manager:
             while video_manager.is_open() and hands_module.is_open():
                 timestamp = int(time.time() * 1000)
-                frame = video_manager.capture_frame(True)
+                frame = video_manager.capture_frame()
                 hands_module.recognize_frame_async(True, frame, timestamp)
                 if hands_module.result_is_ready():
-                    annotated_image, results_dict = hands_module.annotate_image(hands_module.frame)  
+                    annotated_image, results_dict = hands_module.annotate_image(hands_module.frame, "testing")  
                     video_manager.draw(annotated_image)
                     print(results_dict.values())
                 else:
                     print("skipping annotation, model not ready")
                     video_manager.draw(frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break    
