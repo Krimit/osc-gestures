@@ -11,6 +11,12 @@ import time
 
 from video_manager import VideoManager
 
+import asyncio
+import concurrent.futures
+
+# Use a thread pool for the blocking OpenCV reads
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
+
 
 #IGNORED_PREDICTIONS = []
 IGNORED_PREDICTIONS = [
@@ -86,6 +92,13 @@ class Mediapipe_FaceModule():
         if self.measure_time:
             print("--- face.{} completed in {} ms ---".format(method_name, ((time.time() * 1000) - (start_time * 1000))))
 
+    @staticmethod
+    def minify_floats(data, precision=4):
+        if isinstance(data, list):
+            return [round(x, precision) if isinstance(x, float) else x for x in data]
+        elif isinstance(data, float):
+            return round(data, precision)
+        return data    
 
     def draw_landmarks_on_image(self, rgb_image, detection_result, start_time):
       if self.measure_time:  
@@ -130,13 +143,13 @@ class Mediapipe_FaceModule():
               connection_drawing_spec=mp.solutions.drawing_styles
               .get_default_face_mesh_iris_connections_style())
 
-        delim = "\n"
-        categories_to_print = delim.join(map(str, categories_and_scores))
-        #print("akrim categories: \n" + categories_to_print)
-        y0, dy = 20, 20#4
-        for i, line in enumerate(categories_to_print.split('\n')):
-            y = y0 + i*dy
-            cv2.putText(annotated_image, line, (20, y ), cv2.FONT_HERSHEY_COMPLEX_SMALL, 0.8, 2)
+        # delim = "\n"
+        # categories_to_print = delim.join(map(str, categories_and_scores))
+        # #print("akrim categories: \n" + categories_to_print)
+        # y0, dy = 20, 20#4
+        # for i, line in enumerate(categories_to_print.split('\n')):
+        #     y = y0 + i*dy
+        #     cv2.putText(annotated_image, line, (20, y ), cv2.FONT_HERSHEY_COMPLEX_SMALL, 0.8, 2)
 
         #send face data via OSC
         row = map(str, categories_and_scores)
@@ -150,7 +163,7 @@ class Mediapipe_FaceModule():
       # Loop through the detected faces to visualize.
       result = {}
       for idx in range(len(face_landmarks_list)):
-        categories_and_scores = [(i.category_name, i.score) for i in detection_result.face_blendshapes[idx] if i.category_name not in IGNORED_PREDICTIONS]
+        categories_and_scores = [(i.category_name, self.minify_floats(i.score)) for i in detection_result.face_blendshapes[idx] if i.category_name not in IGNORED_PREDICTIONS]
         row = [x for t in categories_and_scores for x in t]
         #print("SIZE {}, categories_and_scores {}".format(len(categories_and_scores), categories_and_scores))
         #print("row {}".format(row))
@@ -166,25 +179,32 @@ class Mediapipe_FaceModule():
 
     def set_detector_result(self, result, output_image: mp.Image, timestamp_ms: int):
         #print("--- loop time %s ms ---" % ((time.time() * 1000) - (timestamp_ms * 1000)))
-        print("--- Face model result arrived. timestamp_ms {}, time_of_last_callback {}, time since last result: {} ms ---".format(timestamp_ms, self.time_of_last_callback, (timestamp_ms - self.time_of_last_callback)))
-        #print('hand landmarker result: {}'.format(result))
         self.detector_result = result
         self.mp_image = output_image
+        if self.time_of_last_callback % 10 == 0:
+            print("--- Face model result arrived. time since last result: {} ms ---".format((timestamp_ms - self.time_of_last_callback)))
         self.time_of_last_callback = int(round(time.time() * 1000))
+
 
     def result_is_ready(self):
         return self.detector_result is not None
 
-    def annotate_image(self, mp_image: mp.Image):
+    def annotate_image(self, frame, camera_name):
         start_time = time.time()
         if not self.result_is_ready():
             return None
-        annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), self.detector_result, time.time())
-        #print("akrim type of face annotated_image {}".format(type(annotated_image)))
-        result_dict = self.stringify_detection(self.detector_result)
+        local_res = self.detector_result
         self.detector_result = None
+        annotated_image = self.draw_landmarks_on_image(frame, local_res, time.time())
+        #annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), local_res, time.time())
+        #print("akrim type of face annotated_image {}".format(type(annotated_image)))
+        result_dict = self.stringify_detection(local_res)
         #self.log_time("annotate_image", start_time)  
         #print("result: {}". format(result_dict))
+
+        # Add text overlay to the individual frame
+        label = f"{camera_name}"
+        cv2.putText(annotated_image, label, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 3)
         return annotated_image, result_dict
 
     def recognize_frame_async(self, is_enabled: bool, frame, timestamp_ms: int):
@@ -194,13 +214,18 @@ class Mediapipe_FaceModule():
         self.is_enabled = is_enabled      
 
         self.timestamp = timestamp_ms
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
+        self.frame = frame
+        # this is only for GPU detection!
+        #rgba_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
+        #mp_image = mp.Image(image_format=mp.ImageFormat.SRGBA, data=rgba_frame)
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
         self.detector.detect_async(mp_image, self.timestamp)       
 
     def init(self):
         self.timestamp = 0
 
-        base_options = BaseOptions(model_asset_path='face_landmarker_v2_with_blendshapes.task')
+        base_options = BaseOptions(model_asset_path='face_landmarker_v2_with_blendshapes.task', delegate=BaseOptions.Delegate.CPU)
         options = vision.FaceLandmarkerOptions(base_options=base_options,
             running_mode=VisionRunningMode.LIVE_STREAM,
             result_callback=self.set_detector_result,
@@ -210,20 +235,35 @@ class Mediapipe_FaceModule():
         self.detector = vision.FaceLandmarker.create_from_options(options)
         return self 
 
+async def main(face_module, video_manager):    
+    while video_manager.is_open() and face_module.is_open():
+        timestamp = int(time.time() * 1000)
+        
+        # 1. READ PHASE: Request frames from both cameras "simultaneously"
+        # Because we use an executor, these run in parallel threads.
+        task = asyncio.create_task(video_manager.capture_frame(True))
+
+        # Wait to finish reading
+        await asyncio.gather(task)
+
+        frame = video_manager.latest_frame
+        if frame is None:
+            continue
+
+        face_module.recognize_frame_async(True, frame, timestamp)
+        if face_module.result_is_ready():
+            annotated_image, results_dict = face_module.annotate_image(face_module.frame)  
+            video_manager.draw(annotated_image)
+            print("result values: {}".format(results_dict.values()))
+        else:
+            print("skipping annotation, model not ready")
+            video_manager.draw(frame)
+        
+        await asyncio.sleep(0)   
             
 if __name__ == "__main__":
     with Mediapipe_FaceModule() as face_module:
         with VideoManager("Camera_0") as video_manager:
-            while video_manager.is_open() and face_module.is_open():
-                timestamp = int(time.time() * 1000)
-                frame = video_manager.capture_frame(True)
-                face_module.recognize_frame_async(True, frame, timestamp)
-                if face_module.result_is_ready():
-                    annotated_image, results_dict = face_module.annotate_image(face_module.mp_image)  
-                    video_manager.draw(annotated_image)
-                    print("result values: {}".format(results_dict.values()))
-                else:
-                    print("skipping annotation, model not ready")
-                    video_manager.draw(frame)
+            asyncio.run(main(face_module, video_manager))
       
 

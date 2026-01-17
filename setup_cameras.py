@@ -64,7 +64,7 @@ class CameraSetup():
 
     def handle_video(self, name: str, video_manager: VideoManager):
     	# Capture frame-by-frame
-        frame = video_manager.capture_frame(True)
+        frame = video_manager.capture_frame()
         video_manager.draw(frame)
 
         # ret, frame = video.read()
@@ -75,9 +75,9 @@ class CameraSetup():
         # camera_name = self.names[index]
         # cv2.imshow(camera_name, frame)
         
-        # if cv2.waitKey(1) & 0xFF == ord('q'):
-        #     print("Closing Camera Stream")
-        #     self.quit = True
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            print("Closing Camera Stream")
+            self.quit = True
 
     def do_loop(self, is_enabled: bool):
         if not self.is_open() and self.quit:

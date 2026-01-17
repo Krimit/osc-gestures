@@ -41,6 +41,7 @@ class Mediapipe_HandsModule():
         self.landmarker = None
         self.recognizer = None
         self.timestamp = 0
+        self.time_of_last_callback = int(round(time.time() * 1000))
         self.is_enabled = True
         self.quit = False
         self.init()
@@ -63,6 +64,14 @@ class Mediapipe_HandsModule():
 
     def is_open(self):
         return not self.quit   
+
+    @staticmethod
+    def minify_floats(data, precision=4):
+        if isinstance(data, list):
+            return [round(x, precision) if isinstance(x, float) else x for x in data]
+        elif isinstance(data, float):
+            return round(data, precision)
+        return data    
 
     def draw_landmarks_on_image(self, rgb_image, landmark_result, gesture_result):
       #print("akrim gestures: {}".format(gesture_result.gestures))
@@ -146,7 +155,7 @@ class Mediapipe_HandsModule():
         row.append(gesture_category)
         row.append(hand_direction)
         for i, landmark in enumerate(hand_landmarks_proto.landmark):
-            row.extend([i, landmark.x, landmark.y, landmark.z])
+            row.extend([i, self.minify_floats(landmark.x), self.minify_floats(landmark.y), self.minify_floats(landmark.z)])
             #print("handedness: {}, index: {}, {}, {}, {}".format(hand, i, landmark.x, landmark.y, landmark.z))
         #print("hand: {}, row: {}".format(hand.lower(), row))
         #print("akrim idx: {}, prev result: {}".format(idx, result))
@@ -159,32 +168,47 @@ class Mediapipe_HandsModule():
         #print('hand landmarker result: {}'.format(result))
         self.landmark_result = result
         self.mp_image = output_image
+        if self.time_of_last_callback % 10 == 0:
+            print("--- Hand landmark model result arrived. time since last result: {} ms ---".format((timestamp_ms - self.time_of_last_callback)))
+
     
     def set_gesture_result(self, result: GestureRecognizerResult, output_image: mp.Image, timestamp_ms: int):
         #print('hand landmarker result: {}'.format(result))
         self.gesture_result = result
         self.mp_image = output_image
+        if self.time_of_last_callback % 10 == 0:
+            print("--- Hand Gesture model result arrived. time since last result: {} ms ---".format((timestamp_ms - self.time_of_last_callback)))
+        self.time_of_last_callback = int(round(time.time() * 1000))
+
 
     def result_is_ready(self):
         return self.gesture_result is not None
 
-    def annotate_image(self, mp_image: mp.Image):
+    def annotate_image(self, frame, camera_name):
         if not self.result_is_ready():
             return None
-        annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), self.landmark_result, self.gesture_result)
+        annotated_image = self.draw_landmarks_on_image(frame, self.landmark_result, self.gesture_result)
         #print("akrim type of hands annotated_image {}".format(type(annotated_image)))
         result_dict = self.stringify_detection(self.gesture_result)
         self.gesture_result = None
         self.landmark_result = None
+        # Add text overlay to the individual frame
+        label = f"{camera_name}"
+        cv2.putText(annotated_image, label, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 3)
         return annotated_image, result_dict
 
     def recognize_frame_async(self, is_enabled: bool, frame, timestamp_ms: int):
         if frame is None:
             return
         
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)    
+        # This is only for GPU detection
+        #rgba_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
+        #mp_image = mp.Image(image_format=mp.ImageFormat.SRGBA, data=rgb_frame)
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)    
         self.is_enabled = is_enabled      
         self.timestamp = timestamp_ms
+        self.frame = frame
         self.landmarker.detect_async(mp_image, self.timestamp)
         self.recognizer.recognize_async(mp_image, self.timestamp)
 
@@ -194,7 +218,7 @@ class Mediapipe_HandsModule():
         gesture_model_path = "models/model_training_4/gesture_recognizer.task"
         # pretrain_model_path = "gesture_recognizer.task"
         landmarker_options = HandLandmarkerOptions(
-            base_options=BaseOptions(model_asset_path='hand_landmarker.task'),
+            base_options=BaseOptions(model_asset_path='hand_landmarker.task', delegate=BaseOptions.Delegate.CPU),
             running_mode=VisionRunningMode.LIVE_STREAM,
             num_hands=2,
             min_hand_detection_confidence= 0.5,
@@ -221,7 +245,7 @@ if __name__ == "__main__":
                 frame = video_manager.capture_frame(True)
                 hands_module.recognize_frame_async(True, frame, timestamp)
                 if hands_module.result_is_ready():
-                    annotated_image, results_dict = hands_module.annotate_image(hands_module.mp_image)  
+                    annotated_image, results_dict = hands_module.annotate_image(hands_module.frame)  
                     video_manager.draw(annotated_image)
                     print(results_dict.values())
                 else:

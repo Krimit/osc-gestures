@@ -38,6 +38,9 @@ IGNORED_PREDICTIONS = [
 ]
 
 
+mp_face_mesh = mp.solutions.face_mesh
+CONNECTIONS = list(mp_face_mesh.FACEMESH_TESSELATION)
+
 MARGIN = 10  # pixels
 FONT_SIZE = 1
 FONT_THICKNESS = 1
@@ -46,7 +49,9 @@ HANDEDNESS_TEXT_COLOR = (88, 205, 54) # vibrant green
 # parameters for the point cloud information
 BODY_DEPTH_LEVEL = 60
 FACE_INTENSITY = 180
-BLUR_AMOUNT = (45, 45)
+BLUR_AMOUNT = (15, 15)
+DEPTH_EXPONENT = 0.3 # make higher for larger contrast
+THICKNESS = 2 # to fill gaps between mesh lines
 
 ImageSegmenter = mp.tasks.vision.ImageSegmenter
 ImageSegmenterOptions = mp.tasks.vision.ImageSegmenterOptions
@@ -95,40 +100,21 @@ class Mediapipe_FaceSegModule():
             print("--- face.{} completed in {} ms ---".format(method_name, ((time.time() * 1000) - (start_time * 1000))))
 
 
-
-    # def paint_face_depth(image_shape, face_landmarks):
-    #     """
-    #     Takes existing landmarks and paints a depth map.
-    #     image_shape: (height, width)
-    #     face_landmarks: The list of landmarks from your EXISTING model
-    #     """
-    #     h, w = image_shape[:2]
+    # Helper to get coords and brightness for an index
+    def get_pt(self, lm, h, w):
+        x, y = int(lm.x * w), int(lm.y * h)
         
-    #     # Create black canvas (Float32 for smooth gradients)
-    #     depth_canvas = np.zeros((h, w), dtype=np.float32)
+        # Invert Z (Close = Positive) and Shift
+        z_metric = (lm.z * -1) + 0.1
         
-    #     # CONFIG
-    #     Z_SCALE = 150  # Pop out intensity
-    #     DOT_SIZE = 20  # Size of each 'light'
+        # Apply Power Curve for "Contour Emphasis"
+        # If z is 0.5: 0.5^1 = 0.5 vs 0.5^2 = 0.25 (Pushes mid-tones down)
+        # We want to normalize z mostly positive before pow
+        z_safe = max(0.0, z_metric) 
         
-    #     # If using standard MediaPipe "NormalizedLandmarkList"
-    #     # We iterate directly over .landmark
-    #     for lm in face_landmarks.landmark:
-    #         x, y = int(lm.x * w), int(lm.y * h)
-            
-    #         # Invert Z: MediaPipe Z is negative for "close", positive for "far"
-    #         # We want Close = Bright
-    #         z = (lm.z * -1) + 0.1 
-    #         brightness = max(0.0, z * Z_SCALE)
-            
-    #         # Draw the dot
-    #         cv2.circle(depth_canvas, (x, y), DOT_SIZE, brightness, -1)
-
-    #     # Blur to create surface
-    #     depth_canvas = cv2.GaussianBlur(depth_canvas, (45, 45), 0)
-        
-    #     # Convert to 0-255 format
-    #     return np.clip(depth_canvas, 0, 255).astype(np.uint8)
+        # Calculate brightness
+        val = (z_safe ** DEPTH_EXPONENT) * FACE_INTENSITY
+        return (x, y), val
 
     def paint_face_depth(self, image_shape, detection_result):
         """
@@ -138,16 +124,57 @@ class Mediapipe_FaceSegModule():
         depth_canvas = np.zeros((h, w), dtype=np.float32)
         
         for face in detection_result.face_landmarks:
-            for lm in face:
-                x, y = int(lm.x * w), int(lm.y * h)
-                z_metric = (lm.z * -1) + 0.1
-                brightness = max(0.0, z_metric * FACE_INTENSITY)
+            # 2. DRAW LINES (The "Skin" Layer)
+            # This fills the black gaps by connecting neighbors
+            for start_idx, end_idx in CONNECTIONS:
+                pt1, b1 = self.get_pt(face[start_idx], h, w)
+                pt2, b2 = self.get_pt(face[end_idx], h, w)
+                
+                # Average the brightness for the line
+                avg_brightness = (b1 + b2) / 2.0
+                
+                # Draw thick line
+                cv2.line(depth_canvas, pt1, pt2, avg_brightness, THICKNESS)
 
-                # Draw large soft circles
-                cv2.circle(depth_canvas, (x, y), 15, brightness, -1)
+            # 3. DRAW DOTS (The "Joints" Layer)
+            # Draw these on top to round off the corners
+            for i, lm in enumerate(face):
+                pt, b = self.get_pt(face[i], h, w)
+                # Radius matches line thickness
+                cv2.circle(depth_canvas, pt, THICKNESS//2, b, -1)
 
+            kernel_size = 20
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+
+            depth_canvas = cv2.morphologyEx(depth_canvas, cv2.MORPH_CLOSE, kernel)    
+                
+            # 4. BLUR
+            # Now that we have a solid wireframe, a smaller blur makes it smooth
+            # rather than muddy.
+            depth_canvas = cv2.GaussianBlur(depth_canvas, BLUR_AMOUNT, 0)
+                
         return depth_canvas
 
+
+
+            # for lm in face:
+            #     x, y = int(lm.x * w), int(lm.y * h)
+            #     z_metric = (lm.z * -1) + 0.1
+
+            #     # Apply Power Curve for "Contour Emphasis"
+            #     # If z is 0.5: 0.5^1 = 0.5 vs 0.5^2 = 0.25 (Pushes mid-tones down)
+            #     # We want to normalize z mostly positive before pow
+            #     z_safe = max(0.0, z_metric) 
+                
+            #     # Calculate brightness
+            #     val = (z_safe ** DEPTH_EXPONENT) * FACE_POP_INTENSITY
+
+            #     #brightness = max(0.0, z_metric * FACE_INTENSITY)
+
+            #     # Draw large soft circles
+            #     cv2.circle(depth_canvas, (x, y), 15, brightness, -1)
+
+        #return depth_canvas
 
 
     def create_alpha_depth(self, rgb_image, frame, segmentation_result, detection_result):
