@@ -71,86 +71,51 @@ class Mediapipe_SegmentationModule():
     def is_open(self):
         return not self.quit   
 
-    # def draw_landmarks_on_image(self, rgb_image, frame, segmentation_result):
-    #     mask = segmentation_result.confidence_masks[0].numpy_view()
 
-    #     frame_bgr = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2BGR)
-
-    #     # 3. Create a visual representation of the mask
-    #     # Option A: Simple grayscale (multiply by factor if labels are small, e.g., 0 and 1)
-    #     visual_mask = (mask * 255).astype(np.uint8)
-        
-    #     # Option B: Colored overlay (e.g., highlights the object in green)
-    #     colored_mask = np.zeros_like(frame_bgr)
-    #     colored_mask[mask > 0] = [0, 255, 0] # Green for detected segments
-        
-    #     # Blend the mask with the original frame
-    #     overlay = cv2.addWeighted(frame_bgr, 0.6, colored_mask, 0.4, 0)
-
-    #     #return visual_mask
-    #     #cv2.imshow('Segmentation Mask', visual_mask)
-    #     #cv2.imshow('Segmentation Overlay', overlay)
-
-    #     # Apply mask to video immediately
-    #     # Put the confidence map into the Alpha channel of the original video
-        
-    #     # Resize mask to match video frame (if needed, usually they match)
-    #     # But normally MediaPipe output matches input size
-        
-    #     b, g, r = cv2.split(frame)
-        
-    #     # Scale confidence (0.0-1.0) to Alpha (0-255)
-    #     alpha = (confidence_mask * 255).astype(np.uint8)
-        
-    #     # Create standard RGBA texture
-    #     rgba_frame = cv2.merge([b, g, r, alpha])
-
-    # Alpha version
-    # def draw_landmarks_on_image(self, rgb_image, frame, segmentation_result):
-    #     h, w, c = frame.shape
-    #     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    #     #timestamp = int(cap.get(cv2.CAP_PROP_POS_MSEC))
-    #     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
-
-    #     confidence_mask = segmentation_result.confidence_masks[0].numpy_view()
-    #     # Turn it into our "Base Depth Layer"
-    #     # 1.0 confidence becomes BODY_DEPTH_LEVEL (e.g., 60)
-    #     body_layer = (confidence_mask * BODY_DEPTH_LEVEL).astype(np.float32) 
-        
-    #     face_layer = np.zeros((h, w), dtype=np.float32)
-
-    #     face_layer_blurred = cv2.GaussianBlur(face_layer, BLUR_AMOUNT, 0)
-        
-    #     combined_map = cv2.add(body_layer, face_layer_blurred)
-
-    #     combined_map[confidence_mask < 0.1] = 0
-
-    #     final_alpha = np.clip(combined_map, 0, 255).astype(np.uint8)
-    #     b, g, r = cv2.split(frame)
-    #     rgba_frame = cv2.merge([b, g, r, final_alpha])   
-
-    #     return rgba_frame
-
-
-    def draw_landmarks_on_image(self, rgb_image, frame, segmentation_result):
+    def draw_segment_as_alpha(self, frame, segmentation_result):
         # 1. Get raw mask
         confidence_mask = segmentation_result.confidence_masks[0].numpy_view()
         
-        # 2. Scale mask to 0-255 uint8 (Full opacity for person)
+        # 2. Scale mask to 0-255 uint8
         alpha_channel = (confidence_mask * 255).astype(np.uint8)
         
-        # 3. Ensure frame is BGR (Standard for OpenCV)
-        # If your original frame was already bright, don't modify BGR values
+        # 3. GET FRAME DIMENSIONS
+        # frame.shape is (height, width, channels)
+        h, w = frame.shape[:2]
+        
+        # 4. RESIZE ALPHA TO MATCH FRAME
+        # cv2.resize expects (width, height)
+        alpha_resized = cv2.resize(alpha_channel, (w, h), interpolation=cv2.INTER_LINEAR)
+        
+        # 5. Ensure frame is BGR and split
+        # If the frame already has 3 channels, we split them
         b, g, r = cv2.split(frame)
         
-        # 4. Merge - This creates a "Straight Alpha" image
-        rgba_frame = cv2.merge([b, g, r, alpha_channel])
+        # 6. Merge with the resized alpha
+        rgba_frame = cv2.merge([b, g, r, alpha_resized])
         
         return rgba_frame
 
 
+    # def draw_segment_as_alpha(self, frame, segmentation_result):
+    #     # 1. Get raw mask
+    #     confidence_mask = segmentation_result.confidence_masks[0].numpy_view()
+        
+    #     # 2. Scale mask to 0-255 uint8 (Full opacity for person)
+    #     alpha_channel = (confidence_mask * 255).astype(np.uint8)
+        
+    #     # 3. Ensure frame is BGR (Standard for OpenCV)
+    #     # If your original frame was already bright, don't modify BGR values
+    #     b, g, r = cv2.split(frame)
+        
+    #     # 4. Merge - This creates a "Straight Alpha" image
+    #     rgba_frame = cv2.merge([b, g, r, alpha_channel])
+        
+    #     return rgba_frame
+
+
     # # image version
-    # def draw_landmarks_on_image(self, rgb_image, frame, segmentation_result):
+    # def draw_segment_as_image(self, rgb_image, frame, segmentation_result):
     #     h, w, _ = frame.shape
         
     #     # 1. Get the confidence mask (values 0.0 to 1.0)
@@ -177,17 +142,16 @@ class Mediapipe_SegmentationModule():
 
 
     def set_segmentation_result(self, result, output_image: mp.Image, timestamp_ms: int):
-        print('segmentation result: {}'.format(result))
         self.segmentation_result = result
         self.mp_image = output_image
 
     def result_is_ready(self):
         return self.segmentation_result is not None
 
-    def annotate_image(self, mp_image: mp.Image, frame):
+    def annotate_image(self, frame):
         if not self.result_is_ready():
             return None
-        annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), frame, self.segmentation_result)
+        annotated_image = self.draw_segment_as_alpha(frame, self.segmentation_result)
         self.segmentation_result = None
         return annotated_image
 
@@ -221,14 +185,11 @@ class Mediapipe_SegmentationModule():
         return self 
 
 
-def publish_to_metal(bridge, syphon_server, frame):
-    with objc.autorelease_pool():
-        #Convert CPU Array -> GPU Texture
-        mtl_texture = bridge.numpy_to_metal(frame)
-        #Publish the Texture
-        syphon_server.publish_frame_texture(mtl_texture)
+def publish_to_metal(bridge, frame):
+    with objc.autorelease_pool():        
+        bridge.publish_to_metal(frame)
 
-async def main(segmentation_module, video_manager, bridge, syphon_server):  
+async def main(segmentation_module, video_manager, bridge):  
     loop = asyncio.get_running_loop()  
     while video_manager.is_open() and segmentation_module.is_open():
         timestamp = int(time.time() * 1000)
@@ -247,9 +208,9 @@ async def main(segmentation_module, video_manager, bridge, syphon_server):
         segmentation_module.recognize_frame_async(True, frame, timestamp)
         while True:
             if segmentation_module.result_is_ready():
-                annotated_image = segmentation_module.annotate_image(segmentation_module.mp_image, segmentation_module.frame)  
+                annotated_image = segmentation_module.annotate_image(segmentation_module.frame)  
                 video_manager.draw(annotated_image)
-                publish_to_metal(bridge, syphon_server, annotated_image)
+                publish_to_metal(bridge, annotated_image)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
                 break
@@ -263,6 +224,5 @@ async def main(segmentation_module, video_manager, bridge, syphon_server):
 if __name__ == "__main__":
     with Mediapipe_SegmentationModule() as segmentation_module:
         with VideoManager("Camera_0") as video_manager:
-            bridge = MetalVideoBridge(W, H)
-            syphon_server = SyphonMetalServer("segmenter-test", device=bridge.device)
-            asyncio.run(main(segmentation_module, video_manager, bridge, syphon_server))
+            bridge = MetalVideoBridge(W, H, "segmenter-test")
+            asyncio.run(main(segmentation_module, video_manager, bridge))

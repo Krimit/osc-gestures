@@ -2,12 +2,19 @@
 .python-version
 .pw
 
+# debugging files
+fil-result/
+
 # models and training data
 *.task
 training_data/
 exported_model/
 models/
 YOLOv10x_gestures.pt
+training/backup_training_data/
+training/deprecated_training_data/
+training/training_data.zip
+unused_models/
 
 # Sublime stuff
 sensors.sublime-workspace
