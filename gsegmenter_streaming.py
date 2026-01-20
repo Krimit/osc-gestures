@@ -266,20 +266,3 @@ if __name__ == "__main__":
             bridge = MetalVideoBridge(W, H)
             syphon_server = SyphonMetalServer("segmenter-test", device=bridge.device)
             asyncio.run(main(segmentation_module, video_manager, bridge, syphon_server))
-
-# if __name__ == "__main__":
-#     with Mediapipe_SegmentationModule() as segmentation_module:
-#         with VideoManager("Camera_0") as video_manager:
-
-#             while video_manager.is_open() and segmentation_module.is_open():
-#                 timestamp = int(time.time() * 1000)
-#                 frame = video_manager.capture_frame()
-#                 if frame is None:
-#                     continue
-#                 segmentation_module.recognize_frame_async(True, frame, timestamp)
-#                 if segmentation_module.result_is_ready():
-#                     annotated_image = segmentation_module.annotate_image(segmentation_module.mp_image, frame)  
-#                     video_manager.draw(annotated_image)
-#                 else:
-#                     print("skipping annotation, model not ready")
-#                     #video_manager.draw(frame)

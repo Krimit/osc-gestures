@@ -3,8 +3,11 @@ import numpy as np
 import Metal
 import sys
 
+from syphon import SyphonMetalServer
+
+
 class MetalVideoBridge:
-    def __init__(self, width, height):
+    def __init__(self, width: int, height: int, output_name: str):
         self.width = width
         self.height = height
         self.texture = None  # <--- We will store the texture here
@@ -14,6 +17,9 @@ class MetalVideoBridge:
         if not self.device:
             print("Error: Metal is not supported.")
             sys.exit(0)
+
+        self.output_name = output_name
+        self.syphon_server = SyphonMetalServer(output_name, device=self.device)    
             
         # 2. Configure Descriptor
         self.texture_descriptor = Metal.MTLTextureDescriptor.texture2DDescriptorWithPixelFormat_width_height_mipmapped_(
@@ -25,6 +31,15 @@ class MetalVideoBridge:
         self.texture_descriptor.setUsage_(Metal.MTLTextureUsageShaderRead)
         self.texture = self.device.newTextureWithDescriptor_(self.texture_descriptor)
 
+    def close(self):
+        print("cloing MetalVideoBridge " + self.output_name)
+        self.syphon_server.stop()
+        self.device = None
+
+    def __exit__(self, unused_exc_type, unused_exc_value, unused_traceback):
+        self.close()    
+
+    #Convert CPU Array -> GPU Texture
     def numpy_to_metal(self, frame):
         # 1. Prepare Data (Convert to BGRA)
         if frame.shape[2] == 3:
@@ -50,3 +65,11 @@ class MetalVideoBridge:
         )
         
         return self.texture
+
+    #Publish the Texture
+    def publish_frame_texture(self, mtl_texture):
+        self.syphon_server.publish_frame_texture(mtl_texture)
+
+    #Convert CPU frame to GPU and publish it
+    def publish_to_metal(self, frame):
+        self.publish_frame_texture(self.numpy_to_metal(frame)) 

@@ -15,7 +15,10 @@ from pythonosc.udp_client import SimpleUDPClient
 from metal_video_bridge import MetalVideoBridge
 from syphon import SyphonMetalServer
 import objc
- 
+
+# set this to true to debug the raw frame (which is sent to Metal) 
+INCLUDE_ORIGINAL_FRAME_IN_GUI = False
+
  # Shared executor
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=16)
 
@@ -30,7 +33,6 @@ detectors_to_enabled = {}
 
 latest_detections = {}
 
-syphon_servers = {}
 syphon_bridges = {}
 
 in_setup_phase = False
@@ -275,6 +277,12 @@ def draw_hud(frame, stats):
     
     return header
 
+def resize_frame(frame):
+    # Optional: Resize to ensure they match widths
+    target_w = 640
+    h, w = frame.shape[:2]
+    return cv2.resize(frame, (target_w, int(h * target_w / w)))
+
 async def gui_manager():
     global latest_detections
     window_name = "Hollow Man Debug View"
@@ -289,11 +297,13 @@ async def gui_manager():
             detection = latest_detections[name]
             frame = detection.annotated_frame
             if frame is not None:
-                # Optional: Resize to ensure they match widths
-                target_w = 640
-                h, w = frame.shape[:2]
-                frame = cv2.resize(frame, (target_w, int(h * target_w / w)))
+                frame = resize_frame(frame)
                 frames_to_stack.append(frame)
+
+            if INCLUDE_ORIGINAL_FRAME_IN_GUI:
+                if detection.original_frame is not None:
+                    original_frame = resize_frame(detection.original_frame)
+                    frames_to_stack.append(original_frame)
 
         if frames_to_stack:
             # Stack all frames vertically
@@ -308,17 +318,13 @@ async def gui_manager():
             
         await asyncio.sleep(0.01) # ~60 FPS refresh
 
-def publish_to_metal(bridge, syphon_server, frame, detection):
-    with objc.autorelease_pool():
-        #Convert CPU Array -> GPU Texture
-        mtl_texture = bridge.numpy_to_metal(frame)
-        #Publish the Texture
-        syphon_server.publish_frame_texture(mtl_texture)
+def publish_to_metal(bridge, frame):
+    with objc.autorelease_pool():        
+        bridge.publish_to_metal(frame)
 
 
 async def syphon_manager():
     global latest_detections
-    global syphon_servers
     global syphon_bridges
 
     loop = asyncio.get_running_loop()
@@ -330,19 +336,15 @@ async def syphon_manager():
                 detection = latest_detections[name]
                 if detection.name not in syphon_bridges:
                     # Initialize bridge with specific camera dimensions if needed
-                    syphon_bridges[detection.name] = MetalVideoBridge(W, H)
-
-
-                if detection.name not in syphon_servers:
-                    server_name = "HollowManVideo_" + detection.name
-                    syphon_servers[detection.name] = SyphonMetalServer(server_name, device=syphon_bridges[detection.name].device)
-                    print("Created new SyphonMetalServer: {}".format(server_name))
+                    output_name = "HollowManVideo_" + detection.name
+                    syphon_bridges[detection.name] = MetalVideoBridge(W, H, output_name)
+                    print("Created new MetalVideoBridge, sending video to metal as: {}".format(output_name))
 
                 frame = detection.original_frame
                 if frame is None:
                     continue
 
-                await loop.run_in_executor(executor, publish_to_metal, syphon_bridges[detection.name], syphon_servers[detection.name], frame, detection)
+                await loop.run_in_executor(executor, publish_to_metal, syphon_bridges[detection.name], frame)
             await asyncio.sleep(0.016) # ~60 FPS refresh
 
 async def main():
