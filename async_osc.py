@@ -1,5 +1,7 @@
 from pythonosc.osc_server import AsyncIOOSCUDPServer
 from pythonosc.dispatcher import Dispatcher
+from pythonosc.osc_message_builder import OscMessageBuilder
+
 import cv2
 from typing import List, Any
 import asyncio
@@ -18,6 +20,9 @@ import objc
 
 # set this to true to debug the raw frame (which is sent to Metal) 
 INCLUDE_ORIGINAL_FRAME_IN_GUI = False
+
+# When enabled, test python code without a MaxMsp dependancy. Turn this OFF when using MaxMsp!
+TEST_MODE = True
 
  # Shared executor
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=16)
@@ -119,7 +124,7 @@ def setup_selected_models(camera_name_to_detector: dict, camera_name_to_camera: 
         print("initializing models {} {}".format(camera_name, detector))
         if camera_name is not None and camera_name != "None":
             model_controllers[detector] = ModelController(camera_name_to_camera[camera_name], detector, executor)
-            print("initialized model controller for dector {}".format(detector))
+            print("initialized model controller for detector {}".format(detector))
     print("finished initializing model controllers for detectors {}".format(model_controllers.keys()))    
 
 
@@ -146,8 +151,9 @@ def handle_models(address: str, *args: List[Any]) -> None:
             return
         camera_name_to_detector = {args[i]: Detector[args[i+1]] for i in range(0, len(args), 2)}
         print("got cameras to detectors: {}".format(camera_name_to_detector))
-        # None is a special camera name to mean we aren't using this model.
-        del camera_name_to_detector["None"]
+        if "None" in camera_name_to_detector:
+            # None is a special camera name to mean we aren't using this model.
+            del camera_name_to_detector["None"]
         print("will use cameras to detectors: {}".format(camera_name_to_detector))
         detectors_to_enabled = {d : False for d in camera_name_to_detector.values()}
         print("Initial detector states: {}".format(detectors_to_enabled))
@@ -347,11 +353,79 @@ async def syphon_manager():
                 await loop.run_in_executor(executor, publish_to_metal, syphon_bridges[detection.name], frame)
             await asyncio.sleep(0.016) # ~60 FPS refresh
 
+
+def inject_osc_message(address, args_list):
+    """
+    Wraps data into an OSC packet and feeds it to the dispatcher.
+    This triggers all wildcard matches (e.g., /controller/cameras*).
+    """
+    builder = OscMessageBuilder(address=address)
+    for val in args_list:
+        builder.add_arg(val)
+    
+    msg = builder.build()
+    # .dgram is the raw byte packet. 
+    # We pass a dummy IP/Port as the "sender".
+    dispatcher.call_handlers_for_packet(msg.dgram, ("127.0.0.1", 0))
+
+async def test_sequence_injector(model_mapping):
+    """
+    Simulates a sequence of OSC messages to automate the setup process.
+    """
+    if not TEST_MODE:
+        return
+
+    print("\n[TEST LAYER] Starting automated test sequence...")
+    await asyncio.sleep(1)
+
+    # 1. Start the cameras
+    print("[TEST LAYER] camera setup starting: /controller/cameras/start")
+    inject_osc_message("/controller/cameras/start", [])
+    await asyncio.sleep(3)
+    print("[TEST LAYER] camera setup done: /controller/cameras/stop")
+    inject_osc_message("/controller/cameras/stop", [])
+
+
+    print(f"[TEST LAYER] Starting models: /controller/models/assign {model_mapping}")
+    inject_osc_message("/controller/models/assign", model_mapping)
+    await asyncio.sleep(2)
+
+    # 3. Dynamically enable every model mentioned in the assignment
+    # We step by 2, looking at index 1, 3, 5...
+    for i in range(1, len(model_mapping), 2):
+        model_name = model_mapping[i]
+        osc_path = f"/controller/models/{model_name}/on"
+        
+        print(f"[TEST LAYER] Enabling model: {osc_path}")
+        inject_osc_message(osc_path, [])
+        
+        # Small delay between activations to prevent race conditions
+        await asyncio.sleep(0.5)
+    
+    print("[TEST LAYER] Sequence complete. Server is now running in test state.\n")
+
 async def main():
     server = AsyncIOOSCUDPServer((ip, recieve_port), dispatcher, asyncio.get_event_loop())
     transport, protocol = await server.create_serve_endpoint()  # Create datagram endpoint and start serving
 
-    await asyncio.gather(camera_selection(), gui_manager(), syphon_manager(), model(Detector.HANDS), model(Detector.FACE), model(Detector.HANDS_AND_FACE))
+    tasks = [
+        camera_selection(),
+        gui_manager(),
+        syphon_manager(),
+        model(Detector.HANDS),
+        model(Detector.FACE),
+        model(Detector.HANDS_AND_FACE)
+    ]
+
+    # Adjust this as needed when testing
+    model_mapping = ["Camera_0", "FACE"]
+    #model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
+
+
+    if TEST_MODE:
+        tasks.append(test_sequence_injector(model_mapping))
+
+    await asyncio.gather(*tasks)
 
     transport.close()  # Clean up serve endpoint
 
