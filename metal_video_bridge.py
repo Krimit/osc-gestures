@@ -39,8 +39,18 @@ class MetalVideoBridge:
     def __exit__(self, unused_exc_type, unused_exc_value, unused_traceback):
         self.close()    
 
+
     #Convert CPU Array -> GPU Texture
     def numpy_to_metal(self, frame):
+        # 1. Get current dimensions
+        h, w = frame.shape[:2]
+
+        # 2. FORCE RESIZE: If the frame doesn't match the Metal Texture, 
+        # Metal will read past the end of the buffer or tilt the image.
+        if w != self.width or h != self.height:
+            frame = cv2.resize(frame, (self.width, self.height), interpolation=cv2.INTER_LINEAR)
+            w, h = self.width, self.height # Update variables
+
         # 1. Prepare Data (Convert to BGRA)
         if frame.shape[2] == 3:
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2BGRA)

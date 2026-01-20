@@ -30,8 +30,6 @@ class VideoManager():
     def close(self):
         print("closing video camera " + self.camera_name)
         self.video.release()
-        if self.syphon_server:
-            self.syphon_server.stop()
         cv2.destroyAllWindows()
         cv2.waitKey(1)
 

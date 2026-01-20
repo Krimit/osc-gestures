@@ -24,6 +24,8 @@ INCLUDE_ORIGINAL_FRAME_IN_GUI = False
 # When enabled, test python code without a MaxMsp dependancy. Turn this OFF when using MaxMsp!
 TEST_MODE = True
 
+COMPUTE_SEGMENT = True
+
  # Shared executor
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=16)
 
@@ -123,7 +125,7 @@ def setup_selected_models(camera_name_to_detector: dict, camera_name_to_camera: 
     for camera_name, detector in camera_name_to_detector.items():
         print("initializing models {} {}".format(camera_name, detector))
         if camera_name is not None and camera_name != "None":
-            model_controllers[detector] = ModelController(camera_name_to_camera[camera_name], detector, executor)
+            model_controllers[detector] = ModelController(camera_name_to_camera[camera_name], detector, executor, COMPUTE_SEGMENT)
             print("initialized model controller for detector {}".format(detector))
     print("finished initializing model controllers for detectors {}".format(model_controllers.keys()))    
 
@@ -381,7 +383,7 @@ async def test_sequence_injector(model_mapping):
     # 1. Start the cameras
     print("[TEST LAYER] camera setup starting: /controller/cameras/start")
     inject_osc_message("/controller/cameras/start", [])
-    await asyncio.sleep(3)
+    await asyncio.sleep(1)
     print("[TEST LAYER] camera setup done: /controller/cameras/stop")
     inject_osc_message("/controller/cameras/stop", [])
 
@@ -419,6 +421,7 @@ async def main():
 
     # Adjust this as needed when testing
     model_mapping = ["Camera_0", "FACE"]
+    #model_mapping = ["Camera_0", "HANDS"]
     #model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
 
 
