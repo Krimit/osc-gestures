@@ -3,17 +3,12 @@ import mediapipe as mp
 import numpy as np
 from mediapipe import solutions
 import time
-from metal_video_bridge import MetalVideoBridge
-from syphon import SyphonMetalServer
 
 import asyncio
 import concurrent.futures
 
 # Use a thread pool for the blocking OpenCV reads
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
-
-W, H = 1280, 720
-SEND_TO_TD = True
 
 class VideoManager():
     """
@@ -29,9 +24,6 @@ class VideoManager():
         self.quit = False
         self.screen_xy = screen_xy
         self.flip = False
-        if SEND_TO_TD:
-            self.bridge = MetalVideoBridge(W, H)
-            self.syphon_server = SyphonMetalServer("HollowManVideo_" + camera_name, device=self.bridge.device)
         self.init()
 
 
@@ -143,10 +135,6 @@ class VideoManager():
             print("Cannot convert to integer: {}. Defaulting to camera 0".format(camera_index))
             camera_num = 0
         self.video = cv2.VideoCapture(camera_num)
-        if SEND_TO_TD:
-            # Set explicit resolution (important for the texture descriptor to match)
-            self.video.set(cv2.CAP_PROP_FRAME_WIDTH, W)
-            self.video.set(cv2.CAP_PROP_FRAME_HEIGHT, H)
 
         cv2.namedWindow(self.camera_name)
         print("setting camera {} to {}".format(self.camera_name, self.screen_xy))
