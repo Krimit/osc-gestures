@@ -26,7 +26,7 @@ INCLUDE_ORIGINAL_FRAME_IN_GUI = False
 # When enabled, test python code without a MaxMsp dependancy. Turn this OFF when using MaxMsp!
 TEST_MODE = True
 
-COMPUTE_SEGMENT = True
+COMPUTE_SEGMENT = False
 
  # Shared executor
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=16)
@@ -133,11 +133,23 @@ def handle_cameras(address: str, *args: List[Any]) -> None:
 def setup_selected_models(camera_name_to_detector: dict, camera_name_to_camera: dict) -> None:
     global model_controllers
     for camera_name, detector in camera_name_to_detector.items():
-        print("initializing models {} {}".format(camera_name, detector))
         if camera_name is not None and camera_name != "None":
+            print("initializing models {} {}".format(camera_name, detector))
             model_controllers[detector] = ModelController(camera_name_to_camera[camera_name], detector, executor, COMPUTE_SEGMENT)
             print("initialized model controller for detector {}".format(detector))
-    print("finished initializing model controllers for detectors {}".format(model_controllers.keys()))    
+    print("finished initializing model controllers for detectors {}".format(model_controllers.keys()))
+
+def setup_segment_models(camera_name_to_camera: dict) -> None:
+    global model_controllers
+    segment_models = []
+    for camera_name, camera in camera_name_to_camera.items():
+        if camera_name is not None and camera_name != "None":
+            print("initializing segment model for camera {}".format(camera_name))
+            segment_models.append(ModelController(camera, Detector.SEGMENT, executor, False))
+            print("initialized model controller for segment for camera {}".format(camera_name))
+    if segment_models:
+        model_controllers[Detector.SEGMENT] = segment_models     
+    print("finished initializing model controllers for segments {}. Now controllers are: {}".format(segment_models, model_controllers))        
 
 
 def handle_models(address: str, *args: List[Any]) -> None:
@@ -157,7 +169,7 @@ def handle_models(address: str, *args: List[Any]) -> None:
     model_instruction = address.removeprefix("/controller/models/").split("/")
 
     if model_instruction[0] == "assign":
-        print("Selecting models to use and pairing with cameras.")
+        print("Selecting models to use and pairing with cameras. Args: {}".format(args))
         if not len(args) >= 2 and not len(args) % 2 == 0:
             print("Unexpected args, must have at least one camera to use, and must have camera-model pairs.")
             return
@@ -168,10 +180,12 @@ def handle_models(address: str, *args: List[Any]) -> None:
             del camera_name_to_detector["None"]
         print("will use cameras to detectors: {}".format(camera_name_to_detector))
         detectors_to_enabled = {d : False for d in camera_name_to_detector.values()}
+        detectors_to_enabled[Detector.SEGMENT] = False
         print("Initial detector states: {}".format(detectors_to_enabled))
         camera_setup.stop_unused_cameras(camera_name_to_detector.keys())
         camera_setup.set_camera_orientation_by_model(camera_name_to_detector)
         setup_selected_models(camera_name_to_detector, camera_setup.video_managers)
+        setup_segment_models(camera_setup.video_managers)
         return
     command = model_instruction[1]
     detector = Detector[model_instruction[0]]
@@ -182,13 +196,14 @@ def handle_models(address: str, *args: List[Any]) -> None:
         print("Stopping the Hands model.") 
         detectors_to_enabled[detector] = False
     else:
-        print("unrecognized command: " + command)            
+        print("unrecognized command: " + command)
+    # detector enabled as a side effect
+    if any(detectors_to_enabled.values()):
+        detectors_to_enabled[Detector.SEGMENT] = True
+    else:
+        detectors_to_enabled[Detector.SEGMENT] = False    
 
 dispatcher = Dispatcher()
-
-# @deprecated
-# Test the cameras, to assign cameras to models.
-#dispatcher.map("/controller/camera-setup*", deprecated_handle_camera)
 
 # Start the cameras, to assign cameras to models.
 dispatcher.map("/controller/cameras*", handle_cameras)
@@ -197,7 +212,7 @@ dispatcher.map("/controller/cameras*", handle_cameras)
 dispatcher.map("/controller/models*", handle_models)
 
 def compute_60fps_sleep_time(start_time):
-    target_fps = 60
+    target_fps = 65
     ideal_frame_duration = 1.0 / target_fps  # 0.01666...
     end_time = asyncio.get_event_loop().time()
     loop_duration = end_time - start_time
@@ -213,9 +228,11 @@ def compute_60fps_sleep_time(start_time):
 async def detect(model_controller):
     global latest_detections
     """Detection iteration"""
+    print("detectors_to_enabled: {}".format(detectors_to_enabled))
     if model_controller.is_open() and detectors_to_enabled[model_controller.enabled_detector]:
         detection = await model_controller.detect()
         if detection is not None:
+            print("got detection {}".format(detection.name))
             entry = {detection.name : detection}
             latest_detections.update(entry)
 
@@ -231,20 +248,66 @@ async def detect(model_controller):
             else:
                 net_stats.record_no_send()
 
-@timeit_async
+# @timeit_async
+# async def model(detector: Detector):
+#     """Main program loop"""
+#     while True:
+#         start_time = asyncio.get_event_loop().time()
+#         # Check conditions
+#         if (detector in model_controllers and 
+#             model_controllers[detector].is_open() and 
+#             detectors_to_enabled.get(detector, False)):
+            
+#             await detect(model_controllers[detector])
+#             await asyncio.sleep(compute_60fps_sleep_time(start_time))
+#         else:
+#             # If detector is disabled, sleep longer to save CPU
+#             await asyncio.sleep(0.1)
+
+
 async def model(detector: Detector):
     """Main program loop"""
     while True:
         start_time = asyncio.get_event_loop().time()
-        # Check conditions
-        if (detector in model_controllers and 
-            model_controllers[detector].is_open() and 
-            detectors_to_enabled.get(detector, False)):
+        
+        #print("model loop for Detector {}. detectors_to_enabled: {}".format(detector, detectors_to_enabled))
+        # 1. Check if the detector is enabled globally
+        if not detectors_to_enabled.get(detector, False):
+            # If detector is disabled, sleep longer to save CPU
+            await asyncio.sleep(0.1)
+            continue
+
+        # 2. Get the controller(s) associated with this detector
+        controllers = model_controllers.get(detector)
+        #print("controllers for {} detector: {}. Out of {}. ".format(detector, controllers, model_controllers))
+        
+        if controllers:
+            # Handle multiple controllers (e.g., SEGMENT)
+            if isinstance(controllers, list):
+                print(f"DEBUG: Found {len(controllers)} controllers in list")
+                for i, c in enumerate(controllers):
+                    print(f"DEBUG: Controller {i} is_open: {c.is_open()}")
+                print("in segment list loop")
+                # Filter for only open controllers
+                active_controllers = [c for c in controllers if c.is_open()]
+                if active_controllers:
+                    print("running segment models")
+                    # Run all detect calls concurrently
+
+                    # 1. Create a list of task objects immediately.
+                    # This starts all of them roughly at the same time.
+                    tasks = [asyncio.create_task(detect(c)) for c in active_controllers]
+        
+                    # 2. Wait for all of them to finish.
+                    await asyncio.gather(*tasks)
             
-            await detect(model_controllers[detector])
+            # Handle single controller (e.g., FACE)
+            elif controllers.is_open():
+                await detect(controllers)
+
+            # Control the frame rate
             await asyncio.sleep(compute_60fps_sleep_time(start_time))
         else:
-            # If detector is disabled, sleep longer to save CPU
             await asyncio.sleep(0.1)
 
 
@@ -436,7 +499,8 @@ async def main():
         syphon_manager(),
         model(Detector.HANDS),
         model(Detector.FACE),
-        model(Detector.HANDS_AND_FACE)
+        model(Detector.HANDS_AND_FACE),
+        model(Detector.SEGMENT)
     ]
 
     # Adjust this as needed when testing
