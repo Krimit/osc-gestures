@@ -9,6 +9,7 @@ from video_manager import VideoManager
 from ghands_streaming import Mediapipe_HandsModule
 from gface_streaming import Mediapipe_FaceModule
 from gsegmenter_streaming import Mediapipe_SegmentationModule
+from timestamp_provider import TimestampProvider
 
 import asyncio
 import concurrent.futures
@@ -35,6 +36,7 @@ class DetectedFrame:
     annotated_frame: np.ndarray
     detection_dict: dict
 
+
 class ModelController():
     """
     """
@@ -55,6 +57,7 @@ class ModelController():
         self.executor = executor
         self.compute_segment = compute_segment
         self.num_loops_waiting_for_results = 0
+        self.timestamp_provider = TimestampProvider()
         self.init()
 
     def init(self):
@@ -76,11 +79,14 @@ class ModelController():
                 or (self.face_module is not None and self.face_module.is_open()))
 
     def close(self):
-        print("closing deps")
+        print("closing mediapipe modules")
         if self.hands_module is not None:
             self.hands_module.close()
         if self.face_module is not None:
             self.face_module.close()
+        if self.segment_module is not None:    
+            self.segment_module.close()
+
 
     def __enter__(self):
         return self
@@ -122,9 +128,9 @@ class ModelController():
         return should_continue    
   
 
-    def maybe_recognize_segment(self, frame, timestamp):
+    def maybe_recognize_segment(self, frame):
         if self.segment_module:
-            self.segment_module.recognize_frame_async(True, frame, timestamp+1) 
+            self.segment_module.recognize_frame_async(True, frame, self.timestamp_provider.get_timestamp()) 
         
 
     async def detect_hands_model(self):
@@ -134,10 +140,10 @@ class ModelController():
                 
         if not self.in_progress:
             self.original_frame = await self._get_frame()
-            self.timestamp = int(time.time() * 1000)
+            self.timestamp = self.timestamp_provider.get_timestamp()
             small_frame = self.original_frame #small_frame = cv2.resize(self.original_frame, RESIZE_DIM, interpolation=cv2.INTER_AREA)
-            self.hands_module.recognize_frame_async(True, small_frame, self.timestamp)
-            self.maybe_recognize_segment(small_frame, self.timestamp)
+            self.hands_module.recognize_frame_async(True, small_frame, self.timestamp_provider.get_timestamp())
+            self.maybe_recognize_segment(small_frame)
             self.in_progress = True
         if self.hands_module.result_is_ready() and self.segment_can_continue():
             #print("Got result! Hands={}, segment={}".format(self.hands_module.result_is_ready(), self.segment_can_continue()))
@@ -161,10 +167,10 @@ class ModelController():
                 
         if not self.in_progress:
             self.original_frame = await self._get_frame()
-            self.timestamp = int(time.time() * 1000)
+            self.timestamp = self.timestamp_provider.get_timestamp()
             small_frame = self.original_frame #small_frame = cv2.resize(self.original_frame, RESIZE_DIM, interpolation=cv2.INTER_AREA)
-            self.face_module.recognize_frame_async(True, small_frame, self.timestamp)
-            self.maybe_recognize_segment(small_frame, self.timestamp)
+            self.face_module.recognize_frame_async(True, small_frame, self.timestamp_provider.get_timestamp())
+            self.maybe_recognize_segment(small_frame)
             self.in_progress = True
         if self.face_module.result_is_ready() and self.segment_can_continue():
             if self.num_loops_waiting_for_results > 2:

@@ -32,12 +32,18 @@ class MetalVideoBridge:
         self.texture = self.device.newTextureWithDescriptor_(self.texture_descriptor)
 
     def close(self):
-        print("cloing MetalVideoBridge " + self.output_name)
-        self.syphon_server.stop()
-        self.device = None
+        if self.syphon_server:
+            print("closing MetalVideoBridge " + self.output_name)
+            self.syphon_server.stop()
+            self.syphon_server = None
+            self.texture = None
+            self.device = None
 
     def __exit__(self, unused_exc_type, unused_exc_value, unused_traceback):
         self.close()    
+
+    def __del__(self):
+        self.close()
 
 
     #Convert CPU Array -> GPU Texture
@@ -64,13 +70,15 @@ class MetalVideoBridge:
         # This copies new pixels into the OLD texture object. Zero allocation.
         region = Metal.MTLRegionMake2D(0, 0, self.width, self.height)
         bytes_per_row = self.width * 4
+
+        raw_data = memoryview(frame)
         
         # Note: Using .tobytes() creates a CPU copy, but it's safe. 
         # For max performance, you'd use memoryview, but let's fix the leak first.
         self.texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow_(
             region,
             0,
-            frame.data,
+            raw_data,
             bytes_per_row
         )
         
@@ -82,4 +90,6 @@ class MetalVideoBridge:
 
     #Convert CPU frame to GPU and publish it
     def publish_to_metal(self, frame):
-        self.publish_frame_texture(self.numpy_to_metal(frame)) 
+        mtl_texture = self.numpy_to_metal(frame)
+        if mtl_texture:
+            self.publish_frame_texture(mtl_texture) 

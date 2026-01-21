@@ -426,7 +426,41 @@ async def test_sequence_injector(model_mapping):
     
     print("[TEST LAYER] Sequence complete. Server is now running in test state.\n")
 
-async def main():
+async def cleanup():
+    """Gracefully shuts down all components in the correct order"""
+    print("\n--- Starting Graceful Shutdown ---")
+    
+    # 1. Stop the cameras first (stops the data source)
+    print("Closing cameras...")
+    camera_setup.close()
+
+    # 2. Close Metal Bridges (Crucial: Stop Syphon before Metal device is killed)
+    print(f"Closing {len(syphon_bridges)} Syphon bridges...")
+    for name, bridge in syphon_bridges.items():
+        try:
+            bridge.close() # This calls syphon_server.stop()
+        except Exception as e:
+            print(f"Error closing bridge {name}: {e}")
+    syphon_bridges.clear()
+
+    # 3. Close Model Controllers
+    print(f"Closing {len(model_controllers)} model controllers...")
+    for detector, controller in model_controllers.items():
+        try:
+            controller.close()
+        except Exception as e:
+            print(f"Error closing controller {detector}: {e}")
+    model_controllers.clear()
+
+    # 4. Shutdown the ThreadPoolExecutor
+    print("Shutting down executor...")
+    executor.shutdown(wait=True, cancel_futures=True)
+    
+    # 5. Destroy OpenCV Windows
+    cv2.destroyAllWindows()
+    print("--- Shutdown Complete ---")
+
+async def main():    
     server = AsyncIOOSCUDPServer((ip, recieve_port), dispatcher, asyncio.get_event_loop())
     transport, protocol = await server.create_serve_endpoint()  # Create datagram endpoint and start serving
 
@@ -448,10 +482,19 @@ async def main():
     if TEST_MODE:
         tasks.append(test_sequence_injector(model_mapping))
 
-    await asyncio.gather(*tasks)
-
-    transport.close()  # Clean up serve endpoint
+    try:
+        # Using return_exceptions=True prevents one task crash from killing the whole app
+        await asyncio.gather(*tasks, return_exceptions=True)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        transport.close()
+        await cleanup()
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        # This catch prevents the ugly traceback on Ctrl+C
+        pass
