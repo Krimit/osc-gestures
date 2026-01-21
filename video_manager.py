@@ -6,6 +6,7 @@ import time
 
 import asyncio
 import concurrent.futures
+import threading
 
 # Use a thread pool for the blocking OpenCV reads
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
@@ -19,11 +20,12 @@ class VideoManager():
         self.mp_drawing = solutions.drawing_utils
         self.video = None
         self.latest_frame = None
-        self.timestamp = 0
         self.is_enabled = True
         self.quit = False
         self.screen_xy = screen_xy
         self.flip = False
+        self._last_time = time.time()
+        self._lock = threading.Lock()
         self.init()
 
 
@@ -62,29 +64,32 @@ class VideoManager():
         return 
 
     def capture_frame(self):
-        if not self.video.isOpened():
-            print("video is closed, shutting down.")
-            return None
+        # 1. Use a lock to ensure only one thread performs the read at a time
+        with self._lock:
+            if not self.video.isOpened():
+                print("video is closed, shutting down.")
+                return None
 
-        # Capture frame-by-frame, in thread
-        # Note: no parens on "read", this is a method reference!
-        ret, frame = self.video.read()
+            # If the last frame is less than 5ms old, don't hit the camera again
+            if self.latest_frame is not None and (time.time() - self._last_time < 0.005):
+                return self.latest_frame
 
-        if not ret:
-            print("Ignoring empty frame")
-            return None   
+            ret, frame = self.video.read()
 
-        self.latest_frame = frame
-        
-        # flip so directions are more intuitive in the shown video. Only do this when using the table, not laptop camera.    
-        if self.flip:
-            frame = cv2.flip(frame,-1)
-        else:
-            # flip right to left by default - for face case
-            frame = cv2.flip(frame,1)
+            if not ret:
+                print("Ignoring empty frame")
+                return None   
+            
+            # flip so directions are more intuitive in the shown video. Only do this when using the table, not laptop camera.    
+            if self.flip:
+                frame = cv2.flip(frame,-1)
+            else:
+                # flip right to left by default - for face case
+                frame = cv2.flip(frame,1)
 
-        #mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
-        return frame  
+            self._last_time = time.time()
+            self.latest_frame = frame
+            return frame.copy()
 
     async def capture_frame_async(self, is_enabled: bool):
         if not self.video.isOpened():
