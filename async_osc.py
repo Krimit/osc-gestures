@@ -12,6 +12,8 @@ from model_controller import ModelController, Detector
 import sys
 import concurrent.futures
 
+from method_timer import timeit_async
+
 from pythonosc.udp_client import SimpleUDPClient
 
 from metal_video_bridge import MetalVideoBridge
@@ -54,23 +56,31 @@ class NetworkStats:
         self.start_time = time.time()
         self.msg_out_count = 0
         self.msg_out_bytes = 0
+        self.metal_out_count = 0
         
         # Snapshot values (for display)
         self.display_out_rate = 0
         self.display_out_kbps = 0.0
+        self.metal_out_rate = 0
 
-    def _check_tick(self):
+    def check_tick(self):
         """Updates averages if 1 second has passed"""
         now = time.time()
         elapsed = now - self.start_time
         if elapsed >= 1.0:
             self.display_out_rate = self.msg_out_count / elapsed
             self.display_out_kbps = (self.msg_out_bytes * 8) / 1000 / elapsed # Kbps
+            self.metal_out_rate = self.metal_out_count / elapsed
             
             # Reset
             self.msg_out_count = 0
             self.msg_out_bytes = 0
+            self.metal_out_count = 0
             self.start_time = now
+
+    def record_metal(self):
+        """Call this right before publishing to GPU metal"""
+        self.metal_out_count += 1
 
     def record_send(self, address, args):
         """Call this right before client.send_message"""
@@ -81,16 +91,16 @@ class NetworkStats:
             size_est += len(args) * 4
         else:
             size_est += 4
-        self.msg_out_bytes += size_est
-        self._check_tick()
+        self.msg_out_bytes += size_est  
 
     def record_no_send(self):
         """Call this when we have a loop iteration with nothing sent"""
-        self._check_tick()        
+        return      
 
 
 # Initialize globally
 net_stats = NetworkStats()
+
 
 
 def handle_cameras(address: str, *args: List[Any]) -> None:
@@ -186,7 +196,20 @@ dispatcher.map("/controller/cameras*", handle_cameras)
 # handle the model lifecycle to start or stop them
 dispatcher.map("/controller/models*", handle_models)
 
+def compute_60fps_sleep_time(start_time):
+    target_fps = 60
+    ideal_frame_duration = 1.0 / target_fps  # 0.01666...
+    end_time = asyncio.get_event_loop().time()
+    loop_duration = end_time - start_time
+    sleep_time = ideal_frame_duration - loop_duration
+    if sleep_time > 0:
+        # We finished early! Sleep only the remainder.
+        return sleep_time
+    else:
+        # We are running slow! Don't sleep at all, yield to others.
+        return 0.001
 
+@timeit_async
 async def detect(model_controller):
     global latest_detections
     """Detection iteration"""
@@ -208,11 +231,9 @@ async def detect(model_controller):
             else:
                 net_stats.record_no_send()
 
-
+@timeit_async
 async def model(detector: Detector):
     """Main program loop"""
-    target_fps = 60
-    ideal_frame_duration = 1.0 / target_fps  # 0.01666...
     while True:
         start_time = asyncio.get_event_loop().time()
         # Check conditions
@@ -221,22 +242,13 @@ async def model(detector: Detector):
             detectors_to_enabled.get(detector, False)):
             
             await detect(model_controllers[detector])
-            end_time = asyncio.get_event_loop().time()
-            loop_duration = end_time - start_time
-            sleep_time = ideal_frame_duration - loop_duration
-            if sleep_time > 0:
-                # We finished early! Sleep only the remainder.
-                await asyncio.sleep(sleep_time)
-            else:
-                # We are running slow! Don't sleep at all, yield to others.
-                await asyncio.sleep(0.001) 
+            await asyncio.sleep(compute_60fps_sleep_time(start_time))
         else:
             # If detector is disabled, sleep longer to save CPU
             await asyncio.sleep(0.1)
 
 
 async def camera_selection():
-    """Main program loop"""
     while True:
         while camera_setup.is_open() and in_setup_phase:
             print("camera setup running")
@@ -264,9 +276,12 @@ def draw_hud(frame, stats):
         borderType=cv2.BORDER_CONSTANT, 
         value=(0, 0, 0) # Black
     )
+
+    # Calculate stats
+    net_stats.check_tick()
     
     # 2. Format the text
-    text = f"OSC OUT: {int(stats.display_out_rate)} msgs/sec | {stats.display_out_kbps:.1f} Kbps"
+    text = f"OSC out {int(stats.display_out_rate)} mps | {stats.display_out_kbps:.1f}  Kbps | GPU out {int(stats.metal_out_rate)} fps"
     
     # 3. Dynamic color: Green if healthy (<600 msgs), Red if high load
     color = (0, 255, 0) if stats.display_out_rate < 600 else (0, 0, 255)
@@ -291,12 +306,14 @@ def resize_frame(frame):
     h, w = frame.shape[:2]
     return cv2.resize(frame, (target_w, int(h * target_w / w)))
 
+@timeit_async
 async def gui_manager():
     global latest_detections
     window_name = "Hollow Man Debug View"
     cv2.namedWindow(window_name)
 
     while True:
+        start_time = asyncio.get_event_loop().time()
         frames_to_stack = []
         
         # Pull frames from the shared dictionary
@@ -324,13 +341,13 @@ async def gui_manager():
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
             
-        await asyncio.sleep(0.01) # ~60 FPS refresh
+        await asyncio.sleep(compute_60fps_sleep_time(start_time))
 
 def publish_to_metal(bridge, frame):
     with objc.autorelease_pool():        
         bridge.publish_to_metal(frame)
 
-
+@timeit_async
 async def syphon_manager():
     global latest_detections
     global syphon_bridges
@@ -339,7 +356,10 @@ async def syphon_manager():
 
     if SEND_TO_TD:
         while True:
+            start_time = asyncio.get_event_loop().time()
             current_names = sorted(list(latest_detections.keys()))
+            if len(current_names) > 0:
+                net_stats.record_metal()
             for name in current_names:
                 detection = latest_detections[name]
                 if detection.name not in syphon_bridges:
@@ -353,7 +373,7 @@ async def syphon_manager():
                     continue
 
                 await loop.run_in_executor(executor, publish_to_metal, syphon_bridges[detection.name], frame)
-            await asyncio.sleep(0.016) # ~60 FPS refresh
+            await asyncio.sleep(compute_60fps_sleep_time(start_time))
 
 
 def inject_osc_message(address, args_list):
@@ -383,7 +403,7 @@ async def test_sequence_injector(model_mapping):
     # 1. Start the cameras
     print("[TEST LAYER] camera setup starting: /controller/cameras/start")
     inject_osc_message("/controller/cameras/start", [])
-    await asyncio.sleep(1)
+    await asyncio.sleep(0.5)
     print("[TEST LAYER] camera setup done: /controller/cameras/stop")
     inject_osc_message("/controller/cameras/stop", [])
 
