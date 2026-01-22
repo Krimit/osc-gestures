@@ -13,5 +13,5 @@ def timeit_async(func):
         finally:
             end_time = loop.time()
             total_ms = (end_time - start_time) * 1000
-            print(f"Function {func.__name__} took {total_ms:.2f} ms")
+            print(f"Function {func.__name__}, with {str(args[0].enabled_detector)} took {total_ms:.2f} ms")
     return wrapper

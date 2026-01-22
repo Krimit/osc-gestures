@@ -42,7 +42,7 @@ class VideoManager():
         self.close()
 
     def __str__(self):
-        return "video: {}".format(self.video)
+        return "video: {}".format(self.camera_name)
 
     def is_open(self):
         return self.video.isOpened() and not self.quit   
