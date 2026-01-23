@@ -173,9 +173,13 @@ class Mediapipe_HandsModule():
         cv2.putText(annotated_image, label, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 3)
         return annotated_image, result_dict
 
-    def recognize_frame_async(self, is_enabled: bool, frame, timestamp_ms: int):
+    def recognize_frame_async(self, is_enabled: bool, frame, timestamp_ms: int, flip: bool=True):
         if frame is None:
             return
+
+        if flip:
+            # Flip top to bottom (0) if using table/special mount. Would normally use -1 (both), but we already flipped in the camera directly.
+            frame = cv2.flip(frame, 0)    
         
         # This is only for GPU detection
         #rgba_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)

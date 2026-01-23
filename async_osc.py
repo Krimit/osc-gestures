@@ -342,7 +342,7 @@ async def model_worker(controller):
                             net_stats.record_send(path, message)
                 else:
                     net_stats.record_no_send()
-            await asyncio.sleep(compute_60fps_sleep_time(start_time))
+            await asyncio.sleep(0.001)
     except asyncio.CancelledError:
         controller.close()
 
@@ -405,6 +405,36 @@ def resize_frame(frame):
     return cv2.resize(frame, (target_w, int(h * target_w / w)))
 
 @timeit_async
+async def gui_manager_iteration(latest_detections, window_name):
+    frames_to_stack = []
+    
+    # Pull frames from the shared dictionary
+    # Sorting by key ensures the order (top to bottom) stays consistent
+    for name in sorted(latest_detections.keys()):
+        detection = latest_detections[name]
+        frame = detection.annotated_frame
+        if frame is not None:
+            frame = resize_frame(frame)
+            frames_to_stack.append(frame)
+
+        if INCLUDE_ORIGINAL_FRAME_IN_GUI:
+            if detection.original_frame is not None:
+                original_frame = resize_frame(detection.original_frame)
+                frames_to_stack.append(original_frame)
+
+    if frames_to_stack:
+        # Stack all frames vertically
+        # Note: All frames must have the same width and channel count
+        combined_view = np.vstack(frames_to_stack)
+        final_image = draw_hud(combined_view, net_stats)
+        cv2.imshow(window_name, final_image)
+
+    # ONE waitKey call to rule them all
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        return False
+    return True    
+        
+
 async def gui_manager():
     global latest_detections
     window_name = "Hollow Man Debug View"
@@ -412,33 +442,10 @@ async def gui_manager():
 
     while True:
         start_time = asyncio.get_event_loop().time()
-        frames_to_stack = []
-        
-        # Pull frames from the shared dictionary
-        # Sorting by key ensures the order (top to bottom) stays consistent
-        for name in sorted(latest_detections.keys()):
-            detection = latest_detections[name]
-            frame = detection.annotated_frame
-            if frame is not None:
-                frame = resize_frame(frame)
-                frames_to_stack.append(frame)
-
-            if INCLUDE_ORIGINAL_FRAME_IN_GUI:
-                if detection.original_frame is not None:
-                    original_frame = resize_frame(detection.original_frame)
-                    frames_to_stack.append(original_frame)
-
-        if frames_to_stack:
-            # Stack all frames vertically
-            # Note: All frames must have the same width and channel count
-            combined_view = np.vstack(frames_to_stack)
-            final_image = draw_hud(combined_view, net_stats)
-            cv2.imshow(window_name, final_image)
-
-        # ONE waitKey call to rule them all
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        active = await gui_manager_iteration(latest_detections, window_name)
+        if not active:
             break
-            
+
         await asyncio.sleep(compute_60fps_sleep_time(start_time))
 
 def publish_to_metal(bridge, frame):
@@ -446,6 +453,25 @@ def publish_to_metal(bridge, frame):
         bridge.publish_to_metal(frame)
 
 @timeit_async
+async def syphon_manager_iteration(loop, latest_detections, syphon_bridges):
+    current_names = sorted(list(latest_detections.keys()))
+    if len(current_names) > 0:
+        net_stats.record_metal()
+    for name in current_names:
+        detection = latest_detections[name]
+        if detection.name not in syphon_bridges:
+            # Initialize bridge with specific camera dimensions if needed
+            output_name = "HollowManVideo_" + detection.name
+            syphon_bridges[detection.name] = MetalVideoBridge(W, H, output_name)
+            print("Created new MetalVideoBridge, sending video to metal as: {}".format(output_name))
+
+        frame = detection.original_frame
+        if frame is None:
+            continue
+
+        await loop.run_in_executor(executor, publish_to_metal, syphon_bridges[detection.name], frame)
+
+
 async def syphon_manager():
     global latest_detections
     global syphon_bridges
@@ -455,22 +481,7 @@ async def syphon_manager():
     if SEND_TO_TD:
         while True:
             start_time = asyncio.get_event_loop().time()
-            current_names = sorted(list(latest_detections.keys()))
-            if len(current_names) > 0:
-                net_stats.record_metal()
-            for name in current_names:
-                detection = latest_detections[name]
-                if detection.name not in syphon_bridges:
-                    # Initialize bridge with specific camera dimensions if needed
-                    output_name = "HollowManVideo_" + detection.name
-                    syphon_bridges[detection.name] = MetalVideoBridge(W, H, output_name)
-                    print("Created new MetalVideoBridge, sending video to metal as: {}".format(output_name))
-
-                frame = detection.original_frame
-                if frame is None:
-                    continue
-
-                await loop.run_in_executor(executor, publish_to_metal, syphon_bridges[detection.name], frame)
+            await syphon_manager_iteration(loop, latest_detections, syphon_bridges)
             await asyncio.sleep(compute_60fps_sleep_time(start_time))
 
 
@@ -527,8 +538,23 @@ async def test_sequence_injector(model_mapping):
 async def cleanup():
     """Gracefully shuts down all components in the correct order"""
     print("\n--- Starting Graceful Shutdown ---")
+
+    for key, task in running_tasks.items():
+        print(f"Cancelling task: {key}")
+        task.cancel()
+
+    if running_tasks:
+        await asyncio.gather(*running_tasks.values(), return_exceptions=True)
+
+    # 3. Close Model Controllers
+    print(f"Closing {len(model_controllers)} model controllers...")
+    for (cam_name, detector), controller in model_controllers.items():
+        try:
+            controller.close()
+        except Exception as e:
+            print(f"Error closing controller {detector}: {e}")
+    model_controllers.clear()        
     
-    # 1. Stop the cameras first (stops the data source)
     print("Closing cameras...")
     camera_setup.close()
 
@@ -541,14 +567,6 @@ async def cleanup():
             print(f"Error closing bridge {name}: {e}")
     syphon_bridges.clear()
 
-    # 3. Close Model Controllers
-    print(f"Closing {len(model_controllers)} model controllers...")
-    for (cam_name, detector), controller in model_controllers.items():
-        try:
-            controller.close()
-        except Exception as e:
-            print(f"Error closing controller {detector}: {e}")
-    model_controllers.clear()
 
     # 4. Shutdown the ThreadPoolExecutor
     print("Shutting down executor...")

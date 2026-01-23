@@ -14,6 +14,8 @@ import asyncio
 import concurrent.futures
 import objc
 
+from method_timer import timeit_async
+
 from pythonosc.udp_client import SimpleUDPClient
 
 client = SimpleUDPClient("127.0.0.1", 5056)
@@ -84,6 +86,8 @@ class ModelController():
             self.hands_module.close()
         if self.face_module is not None:
             self.face_module.close()
+        if self.segment_module is not None:
+            self.segment_module.close()    
 
     def __enter__(self):
         return self
@@ -94,6 +98,7 @@ class ModelController():
     def __str__(self):
         return "video_manager: {}, enabled_detector: {}".format(self.video_manager, self.enabled_detector) 
 
+    @timeit_async
     async def _get_frame(self):
         """Offloads the blocking OpenCV read to a thread"""
         loop = asyncio.get_running_loop()
@@ -130,6 +135,7 @@ class ModelController():
             self.segment_module.recognize_frame_async(True, frame, timestamp+1) 
         
 
+    @timeit_async
     async def detect_hands_model(self):
         time_of_last_callback = self.timestamp
         if not self.is_open():
@@ -155,6 +161,7 @@ class ModelController():
             self.num_loops_waiting_for_results += 1
             return None    
 
+    @timeit_async
     async def detect_face_model(self):
         time_of_last_callback = self.timestamp
         if not self.is_open():
@@ -178,6 +185,7 @@ class ModelController():
             self.num_loops_waiting_for_results += 1
             return None 
 
+    @timeit_async
     async def detect_segment(self):
         time_of_last_callback = self.timestamp
         if not self.is_open():
