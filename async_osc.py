@@ -20,11 +20,11 @@ from metal_video_bridge import MetalVideoBridge
 from syphon import SyphonMetalServer
 import objc
 
+from typing import NamedTuple
+
+
 # set this to true to debug the raw frame (which is sent to Metal) 
 INCLUDE_ORIGINAL_FRAME_IN_GUI = False
-
-# When enabled, test python code without a MaxMsp dependancy. Turn this OFF when using MaxMsp!
-TEST_MODE = True
 
 COMPUTE_SEGMENT = True
 
@@ -36,7 +36,19 @@ recieve_port = 5061
 send_port = 5056
 send_client = SimpleUDPClient(ip, send_port)
 
-model_controllers = {}
+class ModelKey(NamedTuple):
+    camera_name: str
+    detector: Detector
+
+    def __str__(self):
+        return f"{self.camera_name}_{self.detector.name}"
+
+model_controllers: dict[ModelKey, ModelController] = {}
+running_tasks: dict[ModelKey, asyncio.Task] = {}
+_active_tasks = set()
+
+def get_model_key(camera_name, detector):
+    return f"{camera_name}_{detector.name}"
 
 detectors_to_enabled = {}
 
@@ -129,16 +141,32 @@ def handle_cameras(address: str, *args: List[Any]) -> None:
         in_setup_phase = False
     else:
         print("unrecognized command: " + command)
+  
 
-def setup_selected_models(camera_name_to_detector: dict, camera_name_to_camera: dict) -> None:
+def setup_selected_models(camera_detector_pairs: list, camera_name_to_camera: dict) -> None:
     global model_controllers
-    for camera_name, detector in camera_name_to_detector.items():
+    # Clear the specific category if needed, or just update
+    print(f"setup_selected_models pairs {camera_detector_pairs} {camera_name_to_camera}")
+    for camera_name, detector in camera_detector_pairs:
         print("initializing models {} {}".format(camera_name, detector))
-        if camera_name is not None and camera_name != "None":
-            model_controllers[detector] = ModelController(camera_name_to_camera[camera_name], detector, executor, COMPUTE_SEGMENT)
-            print("initialized model controller for detector {}".format(detector))
+        if camera_name != "None":
+            # Add to flat registry
+            model_controllers[(camera_name, detector)] = ModelController(
+                camera_name_to_camera[camera_name], detector, executor
+            )
+        print("initialized model controller for detector {}".format(detector))
     print("finished initializing model controllers for detectors {}".format(model_controllers.keys()))    
 
+
+def setup_segment_models(camera_name_to_camera: dict) -> None:
+    global model_controllers
+    print(f"setup_segment_models {camera_name_to_camera}")
+    for cam_name, camera in camera_name_to_camera.items():
+        if cam_name != "None":
+            # Registry Key: ('Camera_0', Detector.SEGMENT)
+            key = (cam_name, Detector.SEGMENT)
+            if key not in model_controllers:
+                model_controllers[key] = ModelController(camera, Detector.SEGMENT, executor)
 
 def handle_models(address: str, *args: List[Any]) -> None:
     print("address: {}, message: {}".format(address, args))
@@ -161,18 +189,27 @@ def handle_models(address: str, *args: List[Any]) -> None:
         if not len(args) >= 2 and not len(args) % 2 == 0:
             print("Unexpected args, must have at least one camera to use, and must have camera-model pairs.")
             return
-        camera_name_to_detector = {args[i]: Detector[args[i+1]] for i in range(0, len(args), 2)}
-        print("got cameras to detectors: {}".format(camera_name_to_detector))
-        if "None" in camera_name_to_detector:
-            # None is a special camera name to mean we aren't using this model.
-            del camera_name_to_detector["None"]
-        print("will use cameras to detectors: {}".format(camera_name_to_detector))
-        detectors_to_enabled = {d : False for d in camera_name_to_detector.values()}
+        camera_detector_pairs = []
+        for i in range(0, len(args), 2):
+            camera_name = args[i]
+            detector_type = Detector[args[i+1]]
+            if camera_name != "None":
+                camera_detector_pairs.append((camera_name, detector_type))
+
+        print("will use cameras to detectors: {}".format(camera_detector_pairs))
+        detectors_to_enabled = {pair[1] : False for pair in camera_detector_pairs}
         print("Initial detector states: {}".format(detectors_to_enabled))
-        camera_setup.stop_unused_cameras(camera_name_to_detector.keys())
-        camera_setup.set_camera_orientation_by_model(camera_name_to_detector)
-        setup_selected_models(camera_name_to_detector, camera_setup.video_managers)
+        unique_cameras = set(pair[0] for pair in camera_detector_pairs)
+        camera_setup.stop_unused_cameras(list(unique_cameras))
+        
+        #This needs to be revisisted, multiple models might need different orientations, so this should happen in the model instead
+        #camera_setup.set_camera_orientation_by_model(camera_name_to_detector)
+        setup_selected_models(camera_detector_pairs, camera_setup.video_managers)
+        setup_segment_models(camera_setup.video_managers)
+        print("Done assigning models.")
         return
+
+
     command = model_instruction[1]
     detector = Detector[model_instruction[0]]
     if command == "on":
@@ -209,6 +246,54 @@ def compute_60fps_sleep_time(start_time):
         # We are running slow! Don't sleep at all, yield to others.
         return 0.001
 
+async def model_supervisor():
+    """Manages the lifecycle of model workers using ModelKey abstraction."""
+    while True:
+        # 1. Identify what should be running based on current registry
+        desired_keys = set(model_controllers.keys())
+        active_keys = set(running_tasks.keys())
+
+        # 2. Spawn new models
+        for key in desired_keys - active_keys:
+            controller = model_controllers[key]
+            print(f"[SUPERVISOR] Spawning worker: {key}")
+            
+            task = asyncio.create_task(model_worker(controller))
+            running_tasks[key] = task
+            _active_tasks.add(task)
+            task.add_done_callback(_active_tasks.discard)
+
+        # 3. Kill removed models
+        for key in active_keys - desired_keys:
+            print(f"[SUPERVISOR] Pruning worker: {key}")
+            running_tasks[key].cancel()
+            del running_tasks[key]
+
+        await asyncio.sleep(0.5)
+
+
+def is_detector_active(camera_name, detector_type):
+    """
+    Logic to determine if a specific controller should be processing frames.
+    """
+    # 1. If it's a primary model (FACE/HANDS), check the global toggle
+    if detector_type != Detector.SEGMENT:
+        return detectors_to_enabled.get(detector_type, False)
+
+    # 2. If it's a SEGMENTER, check if it's manually on OR if 
+    # ANY primary model on this specific camera is on.
+    if detectors_to_enabled.get(Detector.SEGMENT, False):
+        return True
+        
+    # Check other models on this same camera
+    for (cam, det) in model_controllers.keys():
+        if cam == camera_name and det != Detector.SEGMENT:
+            if detectors_to_enabled.get(det, False):
+                return True
+                
+    return False
+
+
 @timeit_async
 async def detect(model_controller):
     global latest_detections
@@ -216,7 +301,7 @@ async def detect(model_controller):
     if model_controller.is_open() and detectors_to_enabled[model_controller.enabled_detector]:
         detection = await model_controller.detect()
         if detection is not None:
-            entry = {detection.name : detection}
+            entry = {model_controller.name : detection}
             latest_detections.update(entry)
 
             osc_messages = detection.detection_dict
@@ -231,22 +316,35 @@ async def detect(model_controller):
             else:
                 net_stats.record_no_send()
 
-@timeit_async
-async def model(detector: Detector):
-    """Main program loop"""
-    while True:
-        start_time = asyncio.get_event_loop().time()
-        # Check conditions
-        if (detector in model_controllers and 
-            model_controllers[detector].is_open() and 
-            detectors_to_enabled.get(detector, False)):
+async def model_worker(controller):
+    """Isolated loop for a single model/camera pairing."""
+    try:
+        while True:
+            # DYNAMIC CHECK: Is my camera-specific task needed right now?
+            if not is_detector_active(controller.video_manager.camera_name, controller.enabled_detector):
+                print(f"detector {controller.enabled_detector} is not active")
+                await asyncio.sleep(0.1)
+                continue
+                
+            start_time = asyncio.get_event_loop().time()
+            detection = await controller.detect()
             
-            await detect(model_controllers[detector])
+            if detection:
+                entry = {controller.name : detection}
+                latest_detections.update(entry)
+                osc_messages = detection.detection_dict
+                if osc_messages:
+                    for key, message in osc_messages.items():
+                        if message is not None:
+                            path = "/detect/" + key
+                            print("sending osc message to {}".format(path))
+                            send_client.send_message(path, message)
+                            net_stats.record_send(path, message)
+                else:
+                    net_stats.record_no_send()
             await asyncio.sleep(compute_60fps_sleep_time(start_time))
-        else:
-            # If detector is disabled, sleep longer to save CPU
-            await asyncio.sleep(0.1)
-
+    except asyncio.CancelledError:
+        controller.close()
 
 async def camera_selection():
     while True:
@@ -445,7 +543,7 @@ async def cleanup():
 
     # 3. Close Model Controllers
     print(f"Closing {len(model_controllers)} model controllers...")
-    for detector, controller in model_controllers.items():
+    for (cam_name, detector), controller in model_controllers.items():
         try:
             controller.close()
         except Exception as e:
@@ -460,31 +558,33 @@ async def cleanup():
     cv2.destroyAllWindows()
     print("--- Shutdown Complete ---")
 
+# When enabled, test python code without a MaxMsp dependancy. Turn this OFF when using MaxMsp!
+TEST_MODE = True
+
 async def main():    
     server = AsyncIOOSCUDPServer((ip, recieve_port), dispatcher, asyncio.get_event_loop())
     transport, protocol = await server.create_serve_endpoint()  # Create datagram endpoint and start serving
 
     tasks = [
-        camera_selection(),
-        gui_manager(),
-        syphon_manager(),
-        model(Detector.HANDS),
-        model(Detector.FACE),
-        model(Detector.HANDS_AND_FACE)
+        model_supervisor(),       # Manages model worker lifecycles
+        camera_selection(), # Manages camera setup phase
+        gui_manager(),      # OpenCV debug window
+        syphon_manager(),   # GPU / Syphon output
     ]
 
     # Adjust this as needed when testing
-    model_mapping = ["Camera_0", "FACE"]
+    #model_mapping = ["Camera_0", "FACE"]
     #model_mapping = ["Camera_0", "HANDS"]
     #model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
+    model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS"]
 
 
     if TEST_MODE:
         tasks.append(test_sequence_injector(model_mapping))
 
     try:
-        # Using return_exceptions=True prevents one task crash from killing the whole app
-        await asyncio.gather(*tasks, return_exceptions=True)
+        # Using return_exceptions=True can prevent one task crash from killing the whole app, but we don't want that generally!
+        await asyncio.gather(*tasks, return_exceptions=False)
     except asyncio.CancelledError:
         pass
     finally:
