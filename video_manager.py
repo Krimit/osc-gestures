@@ -1,178 +1,166 @@
 import cv2
-import mediapipe as mp
-import numpy as np
-from mediapipe import solutions
-import time
-
-import asyncio
-import concurrent.futures
 import threading
+import time
+import asyncio
 
-# Use a thread pool for the blocking OpenCV reads
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
-
-class VideoManager():
-    """
-    """
-
-    def __init__(self, camera_name: str, screen_xy: list = [0, 0]):
+class VideoManager:
+    def __init__(self, camera_name: str, screen_xy: list = [0, 0], width=1280, height=720, target_fps=60):
         self.camera_name = camera_name
-        self.mp_drawing = solutions.drawing_utils
+        self.screen_xy = screen_xy
+        self.width = width
+        self.height = height
+        self.target_fps = target_fps
+        self.flip = False  # Default flip state
+        
         self.video = None
         self.latest_frame = None
-        self.is_enabled = True
-        self.quit = False
-        self.screen_xy = screen_xy
-        self.flip = False
-        self._last_time = time.time()
+        
+        # Thread control
+        self.stopped = False
         self._lock = threading.Lock()
+        
+        # Initialize camera and window
         self.init()
+        
+        # Start the background producer thread immediately
+        self.thread = threading.Thread(target=self._update_loop, args=())
+        self.thread.daemon = True
+        self.thread.start()
 
+    def init(self):
+        print(f"init {self.camera_name}")
+        camera_num_string = self.camera_name.split("_")[-1]
+        try:
+            camera_num = int(camera_num_string)
+        except ValueError:
+            print(f"Cannot convert to integer: {camera_num_string}. Defaulting to 0")
+            camera_num = 0
+            
+        # 1. Open Camera
+        self.video = cv2.VideoCapture(camera_num)
+        
+        # Set to target_fps if hardware supports it
+        self.video.set(cv2.CAP_PROP_FPS, self.target_fps)
+        self.video.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        self.video.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+
+        # 2. Setup Window (Keep your existing window logic)
+        cv2.namedWindow(self.camera_name)
+        print(f"setting camera {self.camera_name} to {self.screen_xy}")
+        cv2.moveWindow(self.camera_name, self.screen_xy[0], self.screen_xy[1])
+
+        # 3. Warm up: Block until we get at least one valid frame
+        # This ensures the rest of the app doesn't start with None
+        while True:
+            ret, frame = self.video.read()
+            if ret and frame is not None:
+                self.latest_frame = frame
+                print("got a non-empty frame")
+                break
+            print("frame is empty, waiting...")
+            time.sleep(0.1)
+            
+        print(f"Video Camera {camera_num} isOpened: {self.video.isOpened()}")
+
+    def _update_loop(self):
+        """
+        Background Producer:
+        Constantly grabs frames, flips them, and stores them.
+        This runs completely independent of your main loop.
+        """
+        while not self.stopped:
+            if not self.video.isOpened():
+                break
+                
+            ret, frame = self.video.read()
+            
+            if not ret:
+                # If stream is dead, wait a bit and try again to avoid CPU spin
+                time.sleep(0.01)
+                continue
+
+            # Process the frame HERE (in the background) so main thread doesn't pay for it
+            if self.flip:
+                # Flip -1 (both) if using table/special mount
+                frame = cv2.flip(frame, -1)
+            else:
+                # Default mirror flip (1)
+                frame = cv2.flip(frame, 1)
+
+            # Update shared memory safely
+            with self._lock:
+                self.latest_frame = frame
+
+    def capture_frame(self):
+        """
+        Consumer:
+        Returns the latest frame INSTANTLY.
+        No waiting for hardware.
+        """
+        with self._lock:
+            if self.latest_frame is None:
+                return None
+            # Return a COPY so your models can draw on it without messing up others
+            return self.latest_frame.copy()
+
+    def set_flip(self, flip: bool):
+        self.flip = flip
+
+    def is_open(self):
+        return self.video.isOpened() and not self.stopped
+
+    def draw(self, frame):
+        if frame is None:
+            return
+        cv2.imshow(self.camera_name, frame)
+        cv2.waitKey(1)
 
     def close(self):
-        print("closing video camera " + self.camera_name)
-        self.video.release()
+        print(f"closing video camera {self.camera_name}")
+        self.stopped = True
+        if hasattr(self, 'thread'):
+            self.thread.join() # Wait for background thread to finish
+        if self.video:
+            self.video.release()
         cv2.destroyAllWindows()
         cv2.waitKey(1)
 
     def __enter__(self):
         return self
 
-    def __exit__(self, unused_exc_type, unused_exc_value, unused_traceback):
+    def __exit__(self, exc_type, exc_value, traceback):
         self.close()
 
-    def __str__(self):
-        return "video: {}".format(self.video)
+# --- Updated Main Usage ---
 
-    def is_open(self):
-        return self.video.isOpened() and not self.quit   
-
-    def set_flip(self, flip: bool):
-        self.flip = flip
-
-    def draw(self, frame):
-        if frame is None:
-            return
-        cv2.imshow(self.camera_name, frame)
-        
-        # if cv2.waitKey(1) & 0xFF == ord('q'):
-        #     print("Closing Camera Stream")
-        #     self.quit = True
-        return 
-
-    def package_for_draw(self, frame):
-        return 
-
-    def capture_frame(self):
-        # 1. Use a lock to ensure only one thread performs the read at a time
-        with self._lock:
-            if not self.video.isOpened():
-                print("video is closed, shutting down.")
-                return None
-
-            # If the last frame is less than 5ms old, don't hit the camera again
-            if self.latest_frame is not None and (time.time() - self._last_time < 0.005):
-                return self.latest_frame
-
-            ret, frame = self.video.read()
-
-            if not ret:
-                print("Ignoring empty frame")
-                return None   
-            
-            # flip so directions are more intuitive in the shown video. Only do this when using the table, not laptop camera.    
-            if self.flip:
-                frame = cv2.flip(frame,-1)
-            else:
-                # flip right to left by default - for face case
-                frame = cv2.flip(frame,1)
-
-            self._last_time = time.time()
-            self.latest_frame = frame
-            return frame.copy()
-
-    async def capture_frame_async(self, is_enabled: bool):
-        if not self.video.isOpened():
-            print("video is closed, shutting down.")
-            return None
-
-        # Run the blocking "read()" in a separate thread, 
-        # so the external main loop keeps spinning.
-        loop = asyncio.get_running_loop()
-
-        # Capture frame-by-frame, in thread
-        # Note: no parens on "read", this is a method reference!
-        ret, frame = await loop.run_in_executor(executor, self.video.read) 
-
-        if not ret:
-            print("Ignoring empty frame")
-            return None   
-
-        self.latest_frame = frame
-        self.is_enabled = is_enabled                
-        if not(is_enabled):
-            #print("loop - hands disabled")
-            #cv2.imshow('Show', frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                print("Closing Camera Stream")
-                self.quit = True
-            return None
-        
-        # flip so directions are more intuitive in the shown video. Only do this when using the table, not laptop camera.    
-        # TODO(akrim): need input to flip or not based on the usecase. Do that in max when assigning the camera.
-        if self.flip:
-            frame = cv2.flip(frame,-1)
-        else:
-            # flip right to left by default - for face case
-            frame = cv2.flip(frame,1)
-
-        #mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
-        return frame       
-
-    def init(self):
-        print("init {}".format(self.camera_name))
-        camera_num_string = self.camera_name.split("_")[-1]
-        try:
-            camera_num = int(camera_num_string)
-        except ValueError:
-            print("Cannot convert to integer: {}. Defaulting to camera 0".format(camera_index))
-            camera_num = 0
-        self.video = cv2.VideoCapture(camera_num)
-
-        cv2.namedWindow(self.camera_name)
-        print("setting camera {} to {}".format(self.camera_name, self.screen_xy))
-        cv2.moveWindow(self.camera_name, self.screen_xy[0], self.screen_xy[1])
-        while True:
-            ret, frame = self.video.read()
-            #self.draw(frame)
-            if frame is None:
-                print("frame is empty, waiting")
-            if frame is not None:
-                print("got a non-empty frame")
-                break
-        print("Video Camera Number {} isOpened: {}".format(camera_num, self.video.isOpened())) 
-        return self 
-
-async def main(video_manager):    
+async def main(video_manager):
+    print("Starting main loop...")
+    
     while video_manager.is_open():
-        # 1. READ PHASE: Request frames from both cameras "simultaneously"
-        # Because we use an executor, these run in parallel threads.
-        task = asyncio.create_task(video_manager.capture_frame(True))
+        # 1. READ PHASE: 
+        # This is now nearly instant (~0.5ms vs 30ms) because it's just a memory copy.
+        # We don't need 'await' or executors anymore because it doesn't block!
+        frame = video_manager.capture_frame()
         
-        # Wait to finish reading
-        await asyncio.gather(task)
+        if frame is None:
+            await asyncio.sleep(0.01)
+            continue
+        
+        # 2. RUN MODELS (Simulated):
+        # Even if this takes 50ms, the background thread will keep updating 
+        # 'latest_frame' so the next loop iteration gets fresh data.
+        # results = model.process(frame) 
 
-        frame = video_manager.latest_frame
-
+        # 3. DRAW
         video_manager.draw(frame)
         
-        if frame is None:
-            continue
-
-        await asyncio.sleep(0)    
+        # Yield to event loop to keep things responsive
+        await asyncio.sleep(0)
 
 if __name__ == "__main__":
-    with VideoManager("Camera_0") as video_manager:
-        asyncio.run(main(video_manager))
-
-
+    # Ensure you have a "Camera_0" or change the string to match your device index
+    try:
+        with VideoManager("Camera_0", screen_xy=[0,0]) as vm:
+            asyncio.run(main(vm))
+    except KeyboardInterrupt:
+        pass
