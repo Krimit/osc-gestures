@@ -14,6 +14,8 @@ import asyncio
 import concurrent.futures
 import objc
 
+from method_timer import timeit_async
+
 from pythonosc.udp_client import SimpleUDPClient
 
 client = SimpleUDPClient("127.0.0.1", 5056)
@@ -35,6 +37,7 @@ class DetectedFrame:
     original_frame: np.ndarray
     annotated_frame: np.ndarray
     detection_dict: dict
+    detector : Detector 
 
 class ModelController():
     """
@@ -56,14 +59,34 @@ class ModelController():
         self.executor = executor
         self.compute_segment = compute_segment
         self.num_loops_waiting_for_results = 0
+        self.should_flip = False # VideoManager handles pixel flipping, so MP shouldn't.
+        self.invert_handedness = False
+
+        # Access the direction from the manager (Assuming CameraDirection Enum usage)
+        # If the camera is mirrored (Selfie mode), MP needs to know to swap Left/Right labels.
+        if hasattr(self.video_manager, 'camera_direction'):
+            # Assuming CameraDirection.FLIP_SIDE is the "Selfie" mode
+            if self.video_manager.camera_direction.name == "FLIP_SIDE":
+                self.invert_handedness = True
+            else:
+                # NORMAL, FLIP_TOP, FLIP_BOTH usually behave like a "Table" (Direct view)
+                self.invert_handedness = False
+      
         self.init()
 
     def init(self):
-        if self.enabled_detector == Detector.HANDS_AND_FACE:
-            self.hands_module = Mediapipe_HandsModule()
+
+        if self.enabled_detector == Detector.HANDS:
+            self.hands_module = Mediapipe_HandsModule(
+                flip_input=self.should_flip, 
+                invert_handedness=self.invert_handedness
+            )
+        elif self.enabled_detector == Detector.HANDS_AND_FACE:
+            self.hands_module = Mediapipe_HandsModule(
+                flip_input=self.should_flip, 
+                invert_handedness=self.invert_handedness
+            )
             self.face_module = Mediapipe_FaceModule()
-        elif self.enabled_detector == Detector.HANDS:
-            self.hands_module = Mediapipe_HandsModule()
         elif self.enabled_detector == Detector.FACE:
             self.face_module = Mediapipe_FaceModule()
         elif self.enabled_detector == Detector.SEGMENT:
@@ -84,6 +107,8 @@ class ModelController():
             self.hands_module.close()
         if self.face_module is not None:
             self.face_module.close()
+        if self.segment_module is not None:
+            self.segment_module.close()    
 
     def __enter__(self):
         return self
@@ -94,6 +119,7 @@ class ModelController():
     def __str__(self):
         return "video_manager: {}, enabled_detector: {}".format(self.video_manager, self.enabled_detector) 
 
+    #@timeit_async
     async def _get_frame(self):
         """Offloads the blocking OpenCV read to a thread"""
         loop = asyncio.get_running_loop()
@@ -130,6 +156,7 @@ class ModelController():
             self.segment_module.recognize_frame_async(True, frame, timestamp+1) 
         
 
+    #@timeit_async
     async def detect_hands_model(self):
         time_of_last_callback = self.timestamp
         if not self.is_open():
@@ -148,13 +175,14 @@ class ModelController():
             annotated_image, results_dict = await self._get_annotated_frame(self.hands_module, self.hands_module.frame) #self.face_module.annotate_image(self.face_module.frame, self.name)
             self.in_progress = False
             self.num_loops_waiting_for_results = 0
-            detection = DetectedFrame(self.name, None, annotated_image, results_dict)
+            detection = DetectedFrame(self.name, None, annotated_image, results_dict, self.enabled_detector)
             return detection
         else:
             #print("waiting for a result. Hands={}, segment={}".format(self.hands_module.result_is_ready(), self.segment_can_continue()))
             self.num_loops_waiting_for_results += 1
             return None    
 
+    #@timeit_async
     async def detect_face_model(self):
         time_of_last_callback = self.timestamp
         if not self.is_open():
@@ -166,18 +194,19 @@ class ModelController():
             small_frame = self.original_frame #small_frame = cv2.resize(self.original_frame, RESIZE_DIM, interpolation=cv2.INTER_AREA)
             self.face_module.recognize_frame_async(True, small_frame, self.timestamp)
             self.in_progress = True
-        if self.face_module.result_is_ready() and self.segment_can_continue():
+        if self.face_module.result_is_ready():
             if self.num_loops_waiting_for_results > 2:
                 print("face result after {} loops".format(self.num_loops_waiting_for_results))
             annotated_image, results_dict = await self._get_annotated_frame(self.face_module, self.face_module.frame) #self.face_module.annotate_image(self.face_module.frame, self.name)
             self.in_progress = False
             self.num_loops_waiting_for_results = 0
-            detection = DetectedFrame(self.name, None, annotated_image, results_dict)
+            detection = DetectedFrame(self.name, None, annotated_image, results_dict, self.enabled_detector)
             return detection
         else:
             self.num_loops_waiting_for_results += 1
             return None 
 
+    #@timeit_async
     async def detect_segment(self):
         time_of_last_callback = self.timestamp
         if not self.is_open():
@@ -195,7 +224,7 @@ class ModelController():
             visual_frame = await self.get_frame_for_visualizing(self.segment_module.frame)                
             self.in_progress = False
             self.num_loops_waiting_for_results = 0
-            detection = DetectedFrame(self.name, visual_frame, None, None)
+            detection = DetectedFrame(self.name, visual_frame, None, None, self.enabled_detector)
             return detection
         else:
             self.num_loops_waiting_for_results += 1

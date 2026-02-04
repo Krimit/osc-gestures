@@ -30,7 +30,7 @@ class Mediapipe_HandsModule():
     "_" means no hand detected, "Unknown" is used for hand detected but unknown gesture.
     """
 
-    def __init__(self):
+    def __init__(self, flip_input: bool = True, invert_handedness: bool = False):
         self.mp_drawing = solutions.drawing_utils
         self.gesture_result = None
         self.mp_image = None
@@ -39,6 +39,8 @@ class Mediapipe_HandsModule():
         self.time_of_last_callback = int(round(time.time() * 1000))
         self.is_enabled = True
         self.quit = False
+        self.flip_input = flip_input
+        self.invert_handedness = invert_handedness
         self.init()
 
     def close(self):
@@ -151,6 +153,17 @@ class Mediapipe_HandsModule():
       return result
     
     def set_gesture_result(self, result: GestureRecognizerResult, output_image: mp.Image, timestamp_ms: int):
+        if self.invert_handedness and result is not None and result.handedness:
+            for categories in result.handedness:
+                # 'categories' is a list of classifications for a single hand (usually length 1)
+                for category in categories:
+                    if category.category_name == "Left":
+                        category.category_name = "Right"
+                        category.display_name = "Right" 
+                    elif category.category_name == "Right":
+                        category.category_name = "Left"
+                        category.display_name = "Left"
+
         self.gesture_result = result
         self.mp_image = output_image
         if self.time_of_last_callback % 10 == 0:
@@ -176,6 +189,12 @@ class Mediapipe_HandsModule():
     def recognize_frame_async(self, is_enabled: bool, frame, timestamp_ms: int):
         if frame is None:
             return
+
+        if self.flip_input:
+            # Flip top to bottom (0) if using table/special mount. Would normally use -1 (both), but we already flipped in the camera directly.
+            #frame = cv2.flip(frame, 0)   
+            frame = cv2.flip(frame, -1)  
+            print("ghands_streaming cv2.flip(frame, -1)")   
         
         # This is only for GPU detection
         #rgba_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
@@ -192,11 +211,19 @@ class Mediapipe_HandsModule():
         self.timestamp = 0
         gesture_model_path = "models/model_training_4/gesture_recognizer.task"
         # pretrain_model_path = "gesture_recognizer.task"
+        
+        # top down view has a harder time finding hands, so lowering thresholds.
+        min_hand_detection_confidence = 0.3
+        min_hand_presence_confidence = 0.3
+        min_tracking_confidence = 0.3
 
         gesture_options = GestureRecognizerOptions(
             base_options=BaseOptions(model_asset_path=gesture_model_path),
             running_mode=VisionRunningMode.LIVE_STREAM,
             num_hands=2,
+            min_hand_detection_confidence=min_hand_detection_confidence,
+            min_hand_presence_confidence=min_hand_presence_confidence,
+            min_tracking_confidence=min_tracking_confidence,
             result_callback=self.set_gesture_result)
         self.recognizer = GestureRecognizer.create_from_options(gesture_options)
         print("Finished initiating Hands Model.")
@@ -204,11 +231,14 @@ class Mediapipe_HandsModule():
 
             
 if __name__ == "__main__":
-    with Mediapipe_HandsModule() as hands_module:
+    with Mediapipe_HandsModule(flip_input=True, invert_handedness=True) as hands_module:
         with VideoManager("Camera_1") as video_manager:
             while video_manager.is_open() and hands_module.is_open():
                 timestamp = int(time.time() * 1000)
                 frame = video_manager.capture_frame()
+                # assuming sitting in front of camera
+                frame = cv2.flip(frame, 0)
+
                 hands_module.recognize_frame_async(True, frame, timestamp)
                 if hands_module.result_is_ready():
                     annotated_image, results_dict = hands_module.annotate_image(hands_module.frame, "testing")  
@@ -216,6 +246,6 @@ if __name__ == "__main__":
                     print(results_dict.values())
                 else:
                     print("skipping annotation, model not ready")
-                    video_manager.draw(frame)
+                    #video_manager.draw(frame)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break    
