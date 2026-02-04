@@ -3,6 +3,8 @@ import threading
 import time
 import asyncio
 
+from camera_direction import CameraDirection
+
 class VideoManager:
     def __init__(self, camera_name: str, screen_xy: list = [0, 0], width=1280, height=720, target_fps=60):
         self.camera_name = camera_name
@@ -10,7 +12,7 @@ class VideoManager:
         self.width = width
         self.height = height
         self.target_fps = target_fps
-        self.flip = False  # Default flip state
+        self.camera_direction = CameraDirection.NORMAL
         
         self.video = None
         self.latest_frame = None
@@ -62,6 +64,10 @@ class VideoManager:
             
         print(f"Video Camera {camera_num} isOpened: {self.video.isOpened()}")
 
+    def set_camera_direction(self, camera_direction: CameraDirection):
+            self.camera_direction = camera_direction
+            print(f"[{self.camera_name}] camera_direction set to: {self.camera_direction.name}")
+
     def _update_loop(self):
         """
         Background Producer:
@@ -79,13 +85,10 @@ class VideoManager:
                 time.sleep(0.01)
                 continue
 
-            # Process the frame HERE (in the background) so main thread doesn't pay for it
-            if self.flip:
-                # Flip -1 (both) if using table/special mount
-                frame = cv2.flip(frame, -1)
-            else:
-                # Default mirror flip (1)
-                frame = cv2.flip(frame, 1)
+            flip_code = self.camera_direction.to_cv2_code()
+                    
+            if flip_code is not None:
+                frame = cv2.flip(frame, flip_code)
 
             # Update shared memory safely
             with self._lock:
@@ -102,9 +105,6 @@ class VideoManager:
                 return None
             # Return a COPY so your models can draw on it without messing up others
             return self.latest_frame.copy()
-
-    def set_flip(self, flip: bool):
-        self.flip = flip
 
     def is_open(self):
         return self.video.isOpened() and not self.stopped

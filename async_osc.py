@@ -7,8 +7,9 @@ from typing import List, Any
 import asyncio
 import numpy as np
 import time
+from camera_direction import CameraDirection
 from setup_cameras import CameraSetup
-from model_controller import ModelController, Detector
+from model_controller import ModelController, Detector, DetectedFrame
 import sys
 import concurrent.futures
 
@@ -45,6 +46,8 @@ class ModelKey(NamedTuple):
 
 model_controllers: dict[ModelKey, ModelController] = {}
 running_tasks: dict[ModelKey, asyncio.Task] = {}
+camera_assignments: dict[str, Detector] = {}
+
 _active_tasks = set()
 
 def get_model_key(camera_name, detector):
@@ -52,7 +55,8 @@ def get_model_key(camera_name, detector):
 
 detectors_to_enabled = {}
 
-latest_detections = {}
+DetectionMap = dict[str, DetectedFrame]
+latest_detections: DetectionMap = {}
 
 syphon_bridges = {}
 
@@ -113,8 +117,6 @@ class NetworkStats:
 # Initialize globally
 net_stats = NetworkStats()
 
-
-
 def handle_cameras(address: str, *args: List[Any]) -> None:
     print("address: {}, message: {}".format(address, args))
     # We expect an even number of args. For "select" should be pairs of camera_name, model_type, no args for the other commands.
@@ -123,7 +125,7 @@ def handle_cameras(address: str, *args: List[Any]) -> None:
         return
 
     # Check that address is expected
-    if not address in ["/controller/cameras/start", "/controller/cameras/stop", "/controller/cameras/select"]:
+    if not address in ["/controller/cameras/start", "/controller/cameras/stop", "/controller/cameras/select", "/controller/cameras/direction"]:
         print("Unexpected dispatcher address: {}".format(address))
         return
 
@@ -139,23 +141,59 @@ def handle_cameras(address: str, *args: List[Any]) -> None:
         print("Stopping the Cameras.")
         camera_setup.close()
         in_setup_phase = False
+    elif command == "direction":
+        # Expects: [camera_name, orientation_string]
+        # Example: ["Camera_0", "FLIP_SIDE"]
+        if len(args) != 2:
+            print(f"Error: orientation requires [camera_name, mode]. Got: {args}")
+            return
+            
+        target_cam = args[0]
+        mode_str = args[1]
+
+        # VALIDATION: Ensure the string matches a valid Enum
+        try:
+            direction = CameraDirection(mode_str)
+        except ValueError:
+            valid_keys = [e.value for e in CameraDirection]
+            print(f"Error: Invalid orientation '{mode_str}'. Must be one of: {valid_keys}")
+            return
+
+        manager = camera_setup.video_managers.get(target_cam)
+        if manager:
+            manager.set_camera_direction(direction)
+        return    
     else:
         print("unrecognized command: " + command)
   
 
-def setup_selected_models(camera_detector_pairs: list, camera_name_to_camera: dict) -> None:
+def setup_selected_models(keys_to_spawn: list, camera_name_to_camera: dict) -> None:
     global model_controllers
+    global camera_assignments
     # Clear the specific category if needed, or just update
-    print(f"setup_selected_models pairs {camera_detector_pairs} {camera_name_to_camera}")
-    for camera_name, detector in camera_detector_pairs:
-        print("initializing models {} {}".format(camera_name, detector))
+    print(f"setup_selected_models pairs {keys_to_spawn} {camera_name_to_camera}")
+    
+    for key in keys_to_spawn:
+        camera_name = key.camera_name
+        detector_type = key.detector
+        
         if camera_name != "None":
-            # Add to flat registry
-            model_controllers[(camera_name, detector)] = ModelController(
-                camera_name_to_camera[camera_name], detector, executor
-            )
-        print("initialized model controller for detector {}".format(detector))
+            if key not in model_controllers:
+                camera_obj = camera_name_to_camera.get(camera_name)
+
+                if camera_obj is None:
+                    print(f"[ERROR] Could not assign {detector_type.name} to {camera_name}. Camera does not exist or is not started.")
+                    continue # Skip this iteration
+
+                print(f"Initializing {key}")
+
+                model_controllers[key] = ModelController(
+                    camera_obj, 
+                    detector_type, 
+                    executor
+                )
     print("finished initializing model controllers for detectors {}".format(model_controllers.keys()))    
+ 
 
 
 def setup_segment_models(camera_name_to_camera: dict) -> None:
@@ -163,6 +201,7 @@ def setup_segment_models(camera_name_to_camera: dict) -> None:
     print(f"setup_segment_models {camera_name_to_camera}")
     for cam_name, camera in camera_name_to_camera.items():
         if cam_name != "None":
+            key = ModelKey(cam_name, Detector.SEGMENT)
             # Registry Key: ('Camera_0', Detector.SEGMENT)
             key = (cam_name, Detector.SEGMENT)
             if key not in model_controllers:
@@ -182,33 +221,65 @@ def handle_models(address: str, *args: List[Any]) -> None:
         return
 
     global detectors_to_enabled
+    global latest_detections
+    global camera_assignments
+
     model_instruction = address.removeprefix("/controller/models/").split("/")
 
     if model_instruction[0] == "assign":
+        if latest_detections:
+            latest_detections.clear()
+            print("Cleared no longer relevant detections.")
         print("Selecting models to use and pairing with cameras.")
         if not len(args) >= 2 and not len(args) % 2 == 0:
             print("Unexpected args, must have at least one camera to use, and must have camera-model pairs.")
             return
+
+        keys_to_spawn = []
+        camera_assignments.clear() # Reset assignments
+
+        # Track which logic flags we need to initialize in detectors_to_enabled
+        assigned_modes_present = set()
+            
         camera_detector_pairs = []
         for i in range(0, len(args), 2):
             camera_name = args[i]
+            if camera_name == "None": continue
             detector_type = Detector[args[i+1]]
-            if camera_name != "None":
-                camera_detector_pairs.append((camera_name, detector_type))
+            camera_assignments[camera_name] = detector_type
+            assigned_modes_present.add(detector_type)
 
-        print("will use cameras to detectors: {}".format(camera_detector_pairs))
-        detectors_to_enabled = {pair[1] : False for pair in camera_detector_pairs}
-        print("Initial detector states: {}".format(detectors_to_enabled))
-        unique_cameras = set(pair[0] for pair in camera_detector_pairs)
+            # Determine which physical controllers (ModelKeys) to create
+            if detector_type == Detector.HANDS_AND_FACE:
+                keys_to_spawn.append(ModelKey(camera_name, Detector.HANDS))
+                keys_to_spawn.append(ModelKey(camera_name, Detector.FACE))
+            else:
+                keys_to_spawn.append(ModelKey(camera_name, detector_type))
+
+        print(f"Creating controllers for keys: {keys_to_spawn}")
+
+        # Reset enabled state based on the *Assignments* requested
+        detectors_to_enabled = {mode: False for mode in assigned_modes_present}
+        print(f"Initial detector states: {detectors_to_enabled}")
+        
+        # Clean up unused cameras
+        unique_cameras = set(k.camera_name for k in keys_to_spawn)
         camera_setup.stop_unused_cameras(list(unique_cameras))
         
+
         #This needs to be revisisted, multiple models might need different orientations, so this should happen in the model instead
         #camera_setup.set_camera_orientation_by_model(camera_name_to_detector)
-        setup_selected_models(camera_detector_pairs, camera_setup.video_managers)
+
+
+        # Initialize controllers using ModelKeys
+        # Note: We need to adapt setup_selected_models to accept ModelKeys 
+        # or simple list of (cam, detector) tuples. 
+        # Since setup_selected_models in your original code took tuples, 
+        # we can pass ModelKeys directly as they are NamedTuples (behave like tuples).
+        setup_selected_models(keys_to_spawn, camera_setup.video_managers)
         setup_segment_models(camera_setup.video_managers)
         print("Done assigning models.")
         return
-
 
     command = model_instruction[1]
     detector = Detector[model_instruction[0]]
@@ -272,29 +343,35 @@ async def model_supervisor():
         await asyncio.sleep(0.5)
 
 
-def is_detector_active(camera_name, detector_type):
+def is_detector_active(key: ModelKey):
     """
-    Logic to determine if a specific controller should be processing frames.
+    Determines if a worker should run based on its camera's assigned Master Mode.
     """
-    # 1. If it's a primary model (FACE/HANDS), check the global toggle
-    if detector_type != Detector.SEGMENT:
-        return detectors_to_enabled.get(detector_type, False)
+    camera_name = key.camera_name
+    detector_type = key.detector
 
-    # 2. If it's a SEGMENTER, check if it's manually on OR if 
-    # ANY primary model on this specific camera is on.
-    if detectors_to_enabled.get(Detector.SEGMENT, False):
-        return True
+    # Runs if Segment is manually ON, OR if the Main Assigned Model for this camera is ON.
+    if detector_type == Detector.SEGMENT:
+        if detectors_to_enabled.get(Detector.SEGMENT, False):
+            return True
         
-    # Check other models on this same camera
-    for (cam, det) in model_controllers.keys():
-        if cam == camera_name and det != Detector.SEGMENT:
-            if detectors_to_enabled.get(det, False):
-                return True
-                
-    return False
+        # Check if the "Master" assignment for this camera is currently enabled
+        assigned_master = camera_assignments.get(camera_name)
+        if assigned_master and detectors_to_enabled.get(assigned_master, False):
+            return True
+        return False
+
+    # We retrieve what this camera was assigned to (HANDS, FACE, or HANDS_AND_FACE)
+    assigned_master = camera_assignments.get(camera_name)
+    
+    if not assigned_master:
+        return False
+
+    # The worker runs ONLY if the global toggle for its *Assigned Master Mode* is True.
+    return detectors_to_enabled.get(assigned_master, False)
 
 
-@timeit_async
+#@timeit_async
 async def detect(model_controller):
     global latest_detections
     """Detection iteration"""
@@ -318,16 +395,18 @@ async def detect(model_controller):
 
 async def model_worker(controller):
     """Isolated loop for a single model/camera pairing."""
+    model_key = ModelKey(controller.video_manager.camera_name, controller.enabled_detector)
     try:
         while True:
             # DYNAMIC CHECK: Is my camera-specific task needed right now?
-            if not is_detector_active(controller.video_manager.camera_name, controller.enabled_detector):
+            if not is_detector_active(model_key):
                 print(f"detector {controller.enabled_detector} is not active")
                 await asyncio.sleep(0.1)
                 continue
                 
             start_time = asyncio.get_event_loop().time()
             detection = await controller.detect()
+            #print(f"detector {controller.enabled_detector} got detection")
             
             if detection:
                 entry = {controller.name : detection}
@@ -349,7 +428,6 @@ async def model_worker(controller):
 async def camera_selection():
     while True:
         while camera_setup.is_open() and in_setup_phase:
-            print("camera setup running")
             camera_setup.do_loop(True)
             await asyncio.sleep(0.001)   
         await asyncio.sleep(0.1)
@@ -404,7 +482,7 @@ def resize_frame(frame):
     h, w = frame.shape[:2]
     return cv2.resize(frame, (target_w, int(h * target_w / w)))
 
-@timeit_async
+#@timeit_async
 async def gui_manager_iteration(latest_detections, window_name):
     frames_to_stack = []
     
@@ -452,22 +530,28 @@ def publish_to_metal(bridge, frame):
     with objc.autorelease_pool():        
         bridge.publish_to_metal(frame)
 
-@timeit_async
+#@timeit_async
 async def syphon_manager_iteration(loop, latest_detections, syphon_bridges):
-    current_names = sorted(list(latest_detections.keys()))
-    if len(current_names) > 0:
-        net_stats.record_metal()
-    for name in current_names:
-        detection = latest_detections[name]
+    segment_detections = [
+        d for d in latest_detections.values() 
+        if d.detector == Detector.SEGMENT
+    ]
+
+    if not segment_detections:
+        return
+
+    net_stats.record_metal()    
+
+    for detection in segment_detections:
+        frame = detection.original_frame
+        if frame is None:
+            continue
+
         if detection.name not in syphon_bridges:
             # Initialize bridge with specific camera dimensions if needed
             output_name = "HollowManVideo_" + detection.name
             syphon_bridges[detection.name] = MetalVideoBridge(W, H, output_name)
             print("Created new MetalVideoBridge, sending video to metal as: {}".format(output_name))
-
-        frame = detection.original_frame
-        if frame is None:
-            continue
 
         await loop.run_in_executor(executor, publish_to_metal, syphon_bridges[detection.name], frame)
 
@@ -577,7 +661,7 @@ async def cleanup():
     print("--- Shutdown Complete ---")
 
 # When enabled, test python code without a MaxMsp dependancy. Turn this OFF when using MaxMsp!
-TEST_MODE = True
+TEST_MODE = False
 
 async def main():    
     server = AsyncIOOSCUDPServer((ip, recieve_port), dispatcher, asyncio.get_event_loop())
@@ -594,7 +678,8 @@ async def main():
     #model_mapping = ["Camera_0", "FACE"]
     #model_mapping = ["Camera_0", "HANDS"]
     #model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
-    model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS"]
+    #model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS"]
+    model_mapping = ["Camera_0", "HANDS_AND_FACE"]
 
 
     if TEST_MODE:
