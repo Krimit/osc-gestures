@@ -369,31 +369,7 @@ def is_detector_active(key: ModelKey):
 
     # The worker runs ONLY if the global toggle for its *Assigned Master Mode* is True.
     return detectors_to_enabled.get(assigned_master, False)
-
-
-#@timeit_async
-async def detect(model_controller):
-    global latest_detections
-    """Detection iteration"""
-    if model_controller.is_open() and detectors_to_enabled[model_controller.enabled_detector]:
-        detection = await model_controller.detect()
-        if detection is not None:
-            entry = {model_controller.name : detection}
-            latest_detections.update(entry)
-
-            osc_messages = detection.detection_dict
-
-            if osc_messages:
-                for key, message in osc_messages.items():
-                    if message is not None:
-                        path = "/detect/" + key
-                        print("sending osc message to {}".format(path))
-                        net_stats.record_send(path, message)
-                        send_client.send_message(path, message)
-            else:
-                net_stats.record_no_send()
-    else:
-        latest_detections.pop(model_controller.name)            
+          
 
 async def model_worker(controller):
     """Isolated loop for a single model/camera pairing."""
@@ -402,6 +378,9 @@ async def model_worker(controller):
         while True:
             # DYNAMIC CHECK: Is my camera-specific task needed right now?
             if not is_detector_active(model_key):
+                if controller.name in latest_detections:
+                    latest_detections[controller.name] = None
+                #latest_detections.pop(controller.name)            
                 #print(f"detector {controller.enabled_detector} is not active")
                 await asyncio.sleep(0.1)
                 continue
@@ -492,6 +471,8 @@ async def gui_manager_iteration(latest_detections, window_name):
     # Sorting by key ensures the order (top to bottom) stays consistent
     for name in sorted(latest_detections.keys()):
         detection = latest_detections[name]
+        if detection is None:
+            continue
         frame = detection.annotated_frame
         if frame is not None:
             frame = resize_frame(frame)
