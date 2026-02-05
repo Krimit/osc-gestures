@@ -143,15 +143,6 @@ class Mediapipe_FaceModule():
               connection_drawing_spec=mp.solutions.drawing_styles
               .get_default_face_mesh_iris_connections_style())
 
-        # delim = "\n"
-        # categories_to_print = delim.join(map(str, categories_and_scores))
-        # #print("akrim categories: \n" + categories_to_print)
-        # y0, dy = 20, 20#4
-        # for i, line in enumerate(categories_to_print.split('\n')):
-        #     y = y0 + i*dy
-        #     cv2.putText(annotated_image, line, (20, y ), cv2.FONT_HERSHEY_COMPLEX_SMALL, 0.8, 2)
-
-        #send face data via OSC
         row = map(str, categories_and_scores)
       self.log_time("draw_landmarks_on_image", start_time)  
       #self.time_of_last_callback = time.time()
@@ -165,15 +156,6 @@ class Mediapipe_FaceModule():
       for idx in range(len(face_landmarks_list)):
         categories_and_scores = [(i.category_name, self.minify_floats(i.score)) for i in detection_result.face_blendshapes[idx] if i.category_name not in IGNORED_PREDICTIONS]
         row = [x for t in categories_and_scores for x in t]
-        #print("SIZE {}, categories_and_scores {}".format(len(categories_and_scores), categories_and_scores))
-        #print("row {}".format(row))
-
-        # delim = "\n"
-        # categories_to_print = delim.join(map(str, categories_and_scores))
-
-        # #send face data via OSC
-        # row = map(str, categories_to_print)
-        # print("akrim row: {}".format(categories_to_print))
         result["face"] = row  
       return result
 

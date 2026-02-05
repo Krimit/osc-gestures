@@ -37,7 +37,7 @@ class DetectedFrame:
     original_frame: np.ndarray
     annotated_frame: np.ndarray
     detection_dict: dict
-    detector : Detector 
+    detector : Detector
 
 class ModelController():
     """
@@ -59,7 +59,6 @@ class ModelController():
         self.executor = executor
         self.compute_segment = compute_segment
         self.num_loops_waiting_for_results = 0
-        self.should_flip = False # VideoManager handles pixel flipping, so MP shouldn't.
         self.invert_handedness = False
 
         # Access the direction from the manager (Assuming CameraDirection Enum usage)
@@ -78,12 +77,10 @@ class ModelController():
 
         if self.enabled_detector == Detector.HANDS:
             self.hands_module = Mediapipe_HandsModule(
-                flip_input=self.should_flip, 
                 invert_handedness=self.invert_handedness
             )
         elif self.enabled_detector == Detector.HANDS_AND_FACE:
             self.hands_module = Mediapipe_HandsModule(
-                flip_input=self.should_flip, 
                 invert_handedness=self.invert_handedness
             )
             self.face_module = Mediapipe_FaceModule()

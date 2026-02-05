@@ -392,6 +392,8 @@ async def detect(model_controller):
                         send_client.send_message(path, message)
             else:
                 net_stats.record_no_send()
+    else:
+        latest_detections.pop(model_controller.name)            
 
 async def model_worker(controller):
     """Isolated loop for a single model/camera pairing."""
@@ -400,7 +402,7 @@ async def model_worker(controller):
         while True:
             # DYNAMIC CHECK: Is my camera-specific task needed right now?
             if not is_detector_active(model_key):
-                print(f"detector {controller.enabled_detector} is not active")
+                #print(f"detector {controller.enabled_detector} is not active")
                 await asyncio.sleep(0.1)
                 continue
                 
@@ -636,7 +638,8 @@ async def cleanup():
         try:
             controller.close()
         except Exception as e:
-            print(f"Error closing controller {detector}: {e}")
+            #print(f"Error closing controller {detector}: {e}")
+            pass
     model_controllers.clear()        
     
     print("Closing cameras...")
@@ -661,7 +664,7 @@ async def cleanup():
     print("--- Shutdown Complete ---")
 
 # When enabled, test python code without a MaxMsp dependancy. Turn this OFF when using MaxMsp!
-TEST_MODE = False
+TEST_MODE = True
 
 async def main():    
     server = AsyncIOOSCUDPServer((ip, recieve_port), dispatcher, asyncio.get_event_loop())
@@ -679,7 +682,7 @@ async def main():
     #model_mapping = ["Camera_0", "HANDS"]
     #model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
     #model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS"]
-    model_mapping = ["Camera_0", "HANDS_AND_FACE"]
+    model_mapping = ["Camera_1", "HANDS_AND_FACE"]
 
 
     if TEST_MODE:
