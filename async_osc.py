@@ -369,29 +369,7 @@ def is_detector_active(key: ModelKey):
 
     # The worker runs ONLY if the global toggle for its *Assigned Master Mode* is True.
     return detectors_to_enabled.get(assigned_master, False)
-
-
-#@timeit_async
-async def detect(model_controller):
-    global latest_detections
-    """Detection iteration"""
-    if model_controller.is_open() and detectors_to_enabled[model_controller.enabled_detector]:
-        detection = await model_controller.detect()
-        if detection is not None:
-            entry = {model_controller.name : detection}
-            latest_detections.update(entry)
-
-            osc_messages = detection.detection_dict
-
-            if osc_messages:
-                for key, message in osc_messages.items():
-                    if message is not None:
-                        path = "/detect/" + key
-                        print("sending osc message to {}".format(path))
-                        net_stats.record_send(path, message)
-                        send_client.send_message(path, message)
-            else:
-                net_stats.record_no_send()
+          
 
 async def model_worker(controller):
     """Isolated loop for a single model/camera pairing."""
@@ -400,7 +378,10 @@ async def model_worker(controller):
         while True:
             # DYNAMIC CHECK: Is my camera-specific task needed right now?
             if not is_detector_active(model_key):
-                print(f"detector {controller.enabled_detector} is not active")
+                if controller.name in latest_detections:
+                    latest_detections[controller.name] = None
+                #latest_detections.pop(controller.name)            
+                #print(f"detector {controller.enabled_detector} is not active")
                 await asyncio.sleep(0.1)
                 continue
                 
@@ -490,6 +471,8 @@ async def gui_manager_iteration(latest_detections, window_name):
     # Sorting by key ensures the order (top to bottom) stays consistent
     for name in sorted(latest_detections.keys()):
         detection = latest_detections[name]
+        if detection is None:
+            continue
         frame = detection.annotated_frame
         if frame is not None:
             frame = resize_frame(frame)
@@ -636,7 +619,8 @@ async def cleanup():
         try:
             controller.close()
         except Exception as e:
-            print(f"Error closing controller {detector}: {e}")
+            #print(f"Error closing controller {detector}: {e}")
+            pass
     model_controllers.clear()        
     
     print("Closing cameras...")
@@ -661,7 +645,7 @@ async def cleanup():
     print("--- Shutdown Complete ---")
 
 # When enabled, test python code without a MaxMsp dependancy. Turn this OFF when using MaxMsp!
-TEST_MODE = False
+TEST_MODE = True
 
 async def main():    
     server = AsyncIOOSCUDPServer((ip, recieve_port), dispatcher, asyncio.get_event_loop())
@@ -679,7 +663,7 @@ async def main():
     #model_mapping = ["Camera_0", "HANDS"]
     #model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
     #model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS"]
-    model_mapping = ["Camera_0", "HANDS_AND_FACE"]
+    model_mapping = ["Camera_1", "HANDS_AND_FACE"]
 
 
     if TEST_MODE:

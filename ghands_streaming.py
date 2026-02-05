@@ -30,7 +30,7 @@ class Mediapipe_HandsModule():
     "_" means no hand detected, "Unknown" is used for hand detected but unknown gesture.
     """
 
-    def __init__(self, flip_input: bool = True, invert_handedness: bool = False):
+    def __init__(self, invert_handedness: bool = False):
         self.mp_drawing = solutions.drawing_utils
         self.gesture_result = None
         self.mp_image = None
@@ -39,7 +39,6 @@ class Mediapipe_HandsModule():
         self.time_of_last_callback = int(round(time.time() * 1000))
         self.is_enabled = True
         self.quit = False
-        self.flip_input = flip_input
         self.invert_handedness = invert_handedness
         self.init()
 
@@ -190,11 +189,11 @@ class Mediapipe_HandsModule():
         if frame is None:
             return
 
-        if self.flip_input:
-            # Flip top to bottom (0) if using table/special mount. Would normally use -1 (both), but we already flipped in the camera directly.
-            #frame = cv2.flip(frame, 0)   
-            frame = cv2.flip(frame, -1)  
-            print("ghands_streaming cv2.flip(frame, -1)")   
+        # if False:
+        #     # Flip top to bottom (0) if using table/special mount. Would normally use -1 (both), but we already flipped in the camera directly.
+        #     #frame = cv2.flip(frame, 0)   
+        #     frame = cv2.flip(frame, -1)  
+        #     print("ghands_streaming cv2.flip(frame, -1)")   
         
         # This is only for GPU detection
         #rgba_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGBA)
@@ -215,7 +214,7 @@ class Mediapipe_HandsModule():
         # top down view has a harder time finding hands, so lowering thresholds.
         min_hand_detection_confidence = 0.3
         min_hand_presence_confidence = 0.3
-        min_tracking_confidence = 0.3
+        min_tracking_confidence = 0.6
 
         gesture_options = GestureRecognizerOptions(
             base_options=BaseOptions(model_asset_path=gesture_model_path),
@@ -231,7 +230,7 @@ class Mediapipe_HandsModule():
 
             
 if __name__ == "__main__":
-    with Mediapipe_HandsModule(flip_input=True, invert_handedness=True) as hands_module:
+    with Mediapipe_HandsModule(invert_handedness=True) as hands_module:
         with VideoManager("Camera_1") as video_manager:
             while video_manager.is_open() and hands_module.is_open():
                 timestamp = int(time.time() * 1000)

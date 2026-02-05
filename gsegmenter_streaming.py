@@ -97,50 +97,6 @@ class Mediapipe_SegmentationModule():
         return rgba_frame
 
 
-    # def draw_segment_as_alpha(self, frame, segmentation_result):
-    #     # 1. Get raw mask
-    #     confidence_mask = segmentation_result.confidence_masks[0].numpy_view()
-        
-    #     # 2. Scale mask to 0-255 uint8 (Full opacity for person)
-    #     alpha_channel = (confidence_mask * 255).astype(np.uint8)
-        
-    #     # 3. Ensure frame is BGR (Standard for OpenCV)
-    #     # If your original frame was already bright, don't modify BGR values
-    #     b, g, r = cv2.split(frame)
-        
-    #     # 4. Merge - This creates a "Straight Alpha" image
-    #     rgba_frame = cv2.merge([b, g, r, alpha_channel])
-        
-    #     return rgba_frame
-
-
-    # # image version
-    # def draw_segment_as_image(self, rgb_image, frame, segmentation_result):
-    #     h, w, _ = frame.shape
-        
-    #     # 1. Get the confidence mask (values 0.0 to 1.0)
-    #     # MediaPipe ImageSegmenter returns a list of masks; [0] is typically the person
-    #     confidence_mask = segmentation_result.confidence_masks[0].numpy_view()
-
-    #     # 2. Create a 3-channel boolean condition for the mask
-    #     # Thresholding at 0.5 creates a clean binary cut
-    #     condition = np.stack((confidence_mask,) * 3, axis=-1) > 0.5
-
-    #     # 3. Define your background (e.g., solid black)
-    #     # If you want a transparent background, keep using the RGBA merge logic
-    #     bg_image = np.zeros(frame.shape, dtype=np.uint8)
-
-    #     # 4. Extract the person: Where condition is True, use frame; else use bg_image
-    #     extracted_person = np.where(condition, frame, bg_image)
-
-    #     # Optional: If you still want the alpha channel for PNG saving
-    #     # b, g, r = cv2.split(extracted_person)
-    #     # alpha = (confidence_mask * 255).astype(np.uint8)
-    #     # extracted_person = cv2.merge([b, g, r, alpha])
-
-    #     return extracted_person
-
-
     def set_segmentation_result(self, result, output_image: mp.Image, timestamp_ms: int):
         self.segmentation_result = result
         self.mp_image = output_image
