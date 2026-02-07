@@ -9,6 +9,7 @@ from video_manager import VideoManager
 from ghands_streaming import Mediapipe_HandsModule
 from gface_streaming import Mediapipe_FaceModule
 from gsegmenter_streaming import Mediapipe_SegmentationModule
+from model_target import ModelTarget
 
 import asyncio
 import concurrent.futures
@@ -43,7 +44,8 @@ class ModelController():
     """
     """
 
-    def __init__(self, video_manager: VideoManager, enabled_detector: Detector, executor, compute_segment: bool = False):
+    def __init__(self, key, video_manager: VideoManager, enabled_detector: Detector, model_tagret: ModelTarget, executor):
+        self.key = key
         self.video_manager = video_manager
         self.enabled_detector = enabled_detector
         self.hands_module = None
@@ -56,10 +58,10 @@ class ModelController():
         self.in_progress = False
         self.original_frame = None
         self.name = enabled_detector.name + "_" + video_manager.camera_name
-        self.executor = executor
-        self.compute_segment = compute_segment
         self.num_loops_waiting_for_results = 0
         self.invert_handedness = False
+        self.model_tagret = model_tagret
+        self.executor = executor
 
         # Access the direction from the manager (Assuming CameraDirection Enum usage)
         # If the camera is mirrored (Selfie mode), MP needs to know to swap Left/Right labels.
@@ -77,19 +79,13 @@ class ModelController():
 
         if self.enabled_detector == Detector.HANDS:
             self.hands_module = Mediapipe_HandsModule(
+                model_target=self.model_tagret,
                 invert_handedness=self.invert_handedness
             )
-        elif self.enabled_detector == Detector.HANDS_AND_FACE:
-            self.hands_module = Mediapipe_HandsModule(
-                invert_handedness=self.invert_handedness
-            )
-            self.face_module = Mediapipe_FaceModule()
         elif self.enabled_detector == Detector.FACE:
             self.face_module = Mediapipe_FaceModule()
         elif self.enabled_detector == Detector.SEGMENT:
-            self.segment_module = Mediapipe_SegmentationModule()  
-        if self.compute_segment and not self.segment_module:
-            self.segment_module = Mediapipe_SegmentationModule()     
+            self.segment_module = Mediapipe_SegmentationModule()    
         return self         
 
     def is_open(self):
@@ -167,8 +163,8 @@ class ModelController():
             self.in_progress = True
         if self.hands_module.result_is_ready():
             #print("Got result! Hands={}, segment={}".format(self.hands_module.result_is_ready(), self.segment_can_continue()))
-            if self.num_loops_waiting_for_results > 2:
-                print("hands result after {} loops".format(self.num_loops_waiting_for_results))
+            #if self.num_loops_waiting_for_results > 2:
+            #    print("hands result after {} loops".format(self.num_loops_waiting_for_results))
             annotated_image, results_dict = await self._get_annotated_frame(self.hands_module, self.hands_module.frame) #self.face_module.annotate_image(self.face_module.frame, self.name)
             self.in_progress = False
             self.num_loops_waiting_for_results = 0
@@ -192,8 +188,8 @@ class ModelController():
             self.face_module.recognize_frame_async(True, small_frame, self.timestamp)
             self.in_progress = True
         if self.face_module.result_is_ready():
-            if self.num_loops_waiting_for_results > 2:
-                print("face result after {} loops".format(self.num_loops_waiting_for_results))
+            #if self.num_loops_waiting_for_results > 2:
+            #    print("face result after {} loops".format(self.num_loops_waiting_for_results))
             annotated_image, results_dict = await self._get_annotated_frame(self.face_module, self.face_module.frame) #self.face_module.annotate_image(self.face_module.frame, self.name)
             self.in_progress = False
             self.num_loops_waiting_for_results = 0
@@ -216,8 +212,8 @@ class ModelController():
             self.segment_module.recognize_frame_async(True, small_frame, self.timestamp) 
             self.in_progress = True
         if self.segment_module.result_is_ready():
-            if self.num_loops_waiting_for_results > 2:
-                print("segment result after {} loops".format(self.num_loops_waiting_for_results))
+            #if self.num_loops_waiting_for_results > 2:
+            #    print("segment result after {} loops".format(self.num_loops_waiting_for_results))
             visual_frame = await self.get_frame_for_visualizing(self.segment_module.frame)                
             self.in_progress = False
             self.num_loops_waiting_for_results = 0
@@ -227,43 +223,12 @@ class ModelController():
             self.num_loops_waiting_for_results += 1
             return None           
 
-    def detect_hands_and_face_models(self):
-        self.timestamp = int(time.time() * 1000)
-        if not self.is_open():
-            return
-        frame = self.video_manager.capture_frame()
-        if not self.in_progress:
-            self.hands_module.recognize_frame_async(True, frame, self.timestamp)
-            self.face_module.recognize_frame_async(True, frame, self.timestamp)
-            self.in_progress = True
-        if self.hands_module.result_is_ready() and self.face_module.result_is_ready():
-            self.in_progress = False
-            annotated_image, hands_results_dict = self.hands_module.annotate_image(self.hands_module.mp_image)
-            if annotated_image is not None:
-                result_mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=annotated_image)
-                annotated_image, face_results_dict = self.face_module.annotate_image(result_mp_image)
-                self.video_manager.draw(annotated_image)
-                return hands_results_dict | face_results_dict # merge the prediction results
-        elif self.hands_module.result_is_ready():
-            annotated_image, hands_results_dict = self.hands_module.annotate_image(self.hands_module.mp_image)  
-            self.video_manager.draw(annotated_image)
-            return hands_results_dict
-        elif self.face_module.result_is_ready():
-            annotated_image, face_results_dict = self.face_module.annotate_image(self.face_module.mp_image)  
-            self.video_manager.draw(annotated_image)
-            return face_results_dict
-        else:
-            #print("skipping annotation, models not ready")
-            self.video_manager.draw(frame)
-
     async def detect(self):
         match self.enabled_detector:
             case Detector.HANDS:
                 detection = await self.detect_hands_model()
             case Detector.FACE:
                 detection = await self.detect_face_model()
-            case Detector.HANDS_AND_FACE:
-                detection = await self.detect_hands_and_face_models()
             case Detector.SEGMENT:
                 detection = await self.detect_segment()    
             case _:

@@ -8,6 +8,7 @@ import numpy as np
 
 from orientation_calculator import OrientationCalculator
 from video_manager import VideoManager
+from model_target import ModelTarget
 
 
 MARGIN = 10  # pixels
@@ -30,7 +31,7 @@ class Mediapipe_HandsModule():
     "_" means no hand detected, "Unknown" is used for hand detected but unknown gesture.
     """
 
-    def __init__(self, invert_handedness: bool = False):
+    def __init__(self, model_target: ModelTarget = ModelTarget.HANDS_FRONT, invert_handedness: bool = False):
         self.mp_drawing = solutions.drawing_utils
         self.gesture_result = None
         self.mp_image = None
@@ -39,6 +40,7 @@ class Mediapipe_HandsModule():
         self.time_of_last_callback = int(round(time.time() * 1000))
         self.is_enabled = True
         self.quit = False
+        self.model_target = model_target
         self.invert_handedness = invert_handedness
         self.init()
 
@@ -165,8 +167,8 @@ class Mediapipe_HandsModule():
 
         self.gesture_result = result
         self.mp_image = output_image
-        if self.time_of_last_callback % 10 == 0:
-            print("--- Hand Gesture model result arrived. time since last result: {} ms ---".format((timestamp_ms - self.time_of_last_callback)))
+        #if self.time_of_last_callback % 10 == 0:
+        #    print("--- Hand Gesture model result arrived. time since last result: {} ms ---".format((timestamp_ms - self.time_of_last_callback)))
         self.time_of_last_callback = int(round(time.time() * 1000))
 
 
@@ -211,10 +213,10 @@ class Mediapipe_HandsModule():
         gesture_model_path = "models/model_training_4/gesture_recognizer.task"
         # pretrain_model_path = "gesture_recognizer.task"
         
-        # top down view has a harder time finding hands, so lowering thresholds.
-        min_hand_detection_confidence = 0.3
-        min_hand_presence_confidence = 0.3
-        min_tracking_confidence = 0.6
+        print(f"initiating hands model with config: {self.model_target}")
+        min_hand_detection_confidence = self.model_target.config.detection_conf
+        min_hand_presence_confidence = self.model_target.config.presence_conf
+        min_tracking_confidence = self.model_target.config.tracking_conf
 
         gesture_options = GestureRecognizerOptions(
             base_options=BaseOptions(model_asset_path=gesture_model_path),
@@ -230,7 +232,7 @@ class Mediapipe_HandsModule():
 
             
 if __name__ == "__main__":
-    with Mediapipe_HandsModule(invert_handedness=True) as hands_module:
+    with Mediapipe_HandsModule(model_target=ModelTarget.HANDS_BACK, invert_handedness=True) as hands_module:
         with VideoManager("Camera_1") as video_manager:
             while video_manager.is_open() and hands_module.is_open():
                 timestamp = int(time.time() * 1000)

@@ -10,8 +10,12 @@ import time
 from camera_direction import CameraDirection
 from setup_cameras import CameraSetup
 from model_controller import ModelController, Detector, DetectedFrame
+from model_target import ModelTarget
+
 import sys
+import traceback
 import concurrent.futures
+from collections import defaultdict
 
 from method_timer import timeit_async
 
@@ -27,8 +31,6 @@ from typing import NamedTuple
 # set this to true to debug the raw frame (which is sent to Metal) 
 INCLUDE_ORIGINAL_FRAME_IN_GUI = False
 
-COMPUTE_SEGMENT = True
-
  # Shared executor
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=16)
 
@@ -40,9 +42,10 @@ send_client = SimpleUDPClient(ip, send_port)
 class ModelKey(NamedTuple):
     camera_name: str
     detector: Detector
+    model_target: ModelTarget
 
     def __str__(self):
-        return f"{self.camera_name}_{self.detector.name}"
+        return f"{self.camera_name}_{self.detector.name}_{self.model_target}"
 
 model_controllers: dict[ModelKey, ModelController] = {}
 running_tasks: dict[ModelKey, asyncio.Task] = {}
@@ -68,50 +71,76 @@ W, H = 1280, 720
 SEND_TO_TD = True
 
 class NetworkStats:
-    def __init__(self):
+    def __init__(self, log_interval=1.0):
         self.start_time = time.time()
-        self.msg_out_count = 0
-        self.msg_out_bytes = 0
-        self.metal_out_count = 0
+        self.start_time = time.time()
+        self.log_interval = log_interval
         
-        # Snapshot values (for display)
-        self.display_out_rate = 0
-        self.display_out_kbps = 0.0
-        self.metal_out_rate = 0
+        # Accumulators (reset every tick)
+        self.msg_count = 0
+        self.byte_count = 0
+        self.metal_count = 0
+        self.address_counts = defaultdict(int)
+
+        # Public Display vars (for HUD)
+        self.display_rate = 0.0
+        self.display_kbps = 0.0
+        self.metal_rate = 0.0
 
     def check_tick(self):
-        """Updates averages if 1 second has passed"""
+        """Call this in your main loop."""
         now = time.time()
         elapsed = now - self.start_time
-        if elapsed >= 1.0:
-            self.display_out_rate = self.msg_out_count / elapsed
-            self.display_out_kbps = (self.msg_out_bytes * 8) / 1000 / elapsed # Kbps
-            self.metal_out_rate = self.metal_out_count / elapsed
-            
-            # Reset
-            self.msg_out_count = 0
-            self.msg_out_bytes = 0
-            self.metal_out_count = 0
+        
+        if elapsed >= self.log_interval:
+            # 1. Update HUD Stats
+            self.display_rate = self.msg_count / elapsed
+            self.display_kbps = (self.byte_count * 8) / 1000 / elapsed
+            self.metal_rate = self.metal_count / elapsed
+
+            # 2. Print (Helper Method)
+            self._print_log(elapsed)
+
+            # 3. Reset
+            self.msg_count = 0
+            self.byte_count = 0
+            self.metal_count = 0
+            self.address_counts.clear()
             self.start_time = now
 
     def record_metal(self):
         """Call this right before publishing to GPU metal"""
-        self.metal_out_count += 1
+        self.metal_count += 1
 
     def record_send(self, address, args):
         """Call this right before client.send_message"""
-        self.msg_out_count += 1
+        self.msg_count += 1
         # Estimate size: Address string + 4 bytes per float/int arg + 20 bytes overhead
         size_est = len(address) + 20
         if isinstance(args, list):
             size_est += len(args) * 4
         else:
             size_est += 4
-        self.msg_out_bytes += size_est  
+
+        self.address_counts[address] += 1
+        self.byte_count += size_est  
 
     def record_no_send(self):
         """Call this when we have a loop iteration with nothing sent"""
-        return      
+        return   
+
+    def _print_log(self, elapsed):
+        """Dedicated helper for console output."""
+        if self.msg_count == 0:
+            return 
+
+        # 1. Format the details list into a single string
+        # Example: "/detect/face: 22 | /detect/hand: 15"
+        sorted_addresses = sorted(self.address_counts.items(), key=lambda x: x[1], reverse=True)
+        details = " | ".join([f"{addr}: {count}" for addr, count in sorted_addresses])
+        
+        # 2. Print one consolidated line
+        print(f"[HEARTBEAT] {self.display_rate:>4.1f} m/s | {self.display_kbps:>5.1f} Kbps :: {details}")   
 
 
 # Initialize globally
@@ -176,6 +205,7 @@ def setup_selected_models(keys_to_spawn: list, camera_name_to_camera: dict) -> N
     for key in keys_to_spawn:
         camera_name = key.camera_name
         detector_type = key.detector
+        model_target = key.model_target
         
         if camera_name != "None":
             if key not in model_controllers:
@@ -188,8 +218,10 @@ def setup_selected_models(keys_to_spawn: list, camera_name_to_camera: dict) -> N
                 print(f"Initializing {key}")
 
                 model_controllers[key] = ModelController(
+                    key,
                     camera_obj, 
-                    detector_type, 
+                    detector_type,
+                    model_target,
                     executor
                 )
     print("finished initializing model controllers for detectors {}".format(model_controllers.keys()))    
@@ -201,11 +233,9 @@ def setup_segment_models(camera_name_to_camera: dict) -> None:
     print(f"setup_segment_models {camera_name_to_camera}")
     for cam_name, camera in camera_name_to_camera.items():
         if cam_name != "None":
-            key = ModelKey(cam_name, Detector.SEGMENT)
-            # Registry Key: ('Camera_0', Detector.SEGMENT)
-            key = (cam_name, Detector.SEGMENT)
+            key = ModelKey(cam_name, Detector.SEGMENT, ModelTarget.BODY)
             if key not in model_controllers:
-                model_controllers[key] = ModelController(camera, Detector.SEGMENT, executor)
+                model_controllers[key] = ModelController(key, camera, key.detector, key.model_target, executor)
 
 def handle_models(address: str, *args: List[Any]) -> None:
     print("address: {}, message: {}".format(address, args))
@@ -251,10 +281,16 @@ def handle_models(address: str, *args: List[Any]) -> None:
 
             # Determine which physical controllers (ModelKeys) to create
             if detector_type == Detector.HANDS_AND_FACE:
-                keys_to_spawn.append(ModelKey(camera_name, Detector.HANDS))
-                keys_to_spawn.append(ModelKey(camera_name, Detector.FACE))
-            else:
-                keys_to_spawn.append(ModelKey(camera_name, detector_type))
+                keys_to_spawn.append(ModelKey(camera_name, Detector.HANDS, ModelTarget.HANDS_FRONT))
+                keys_to_spawn.append(ModelKey(camera_name, Detector.FACE, ModelTarget.FACE))
+            elif detector_type == Detector.HANDS:
+                keys_to_spawn.append(ModelKey(camera_name, detector_type, ModelTarget.HANDS_BACK))
+            elif detector_type == Detector.FACE:
+                keys_to_spawn.append(ModelKey(camera_name, detector_type, ModelTarget.FACE))
+            elif detector_type == Detector.SEGMENT:
+                keys_to_spawn.append(ModelKey(camera_name, detector_type, ModelTarget.BODY))
+            else: raise ValueError(f"Unrecognized detector {detector_type}.")
+     
 
         print(f"Creating controllers for keys: {keys_to_spawn}")
 
@@ -317,6 +353,28 @@ def compute_60fps_sleep_time(start_time):
         # We are running slow! Don't sleep at all, yield to others.
         return 0.001
 
+def log_task_exceptions(task: asyncio.Task):
+    """
+    Callback to print errors from background tasks.
+    """
+    # 1. Ensure we remove it from the active set (Cleanup)
+    _active_tasks.discard(task)
+
+    # 2. Check for errors
+    try:
+        # This retrieves the exception if one occurred
+        exc = task.exception() 
+        if exc:
+            print(f"\n[!!! CRITICAL TASK FAILURE !!!]")
+            # This prints the actual error line numbers
+            traceback.print_exception(type(exc), exc, exc.__traceback__)
+            print("[!!! END ERROR REPORT !!!]\n")
+    except asyncio.CancelledError:
+        # This is normal during shutdown
+        pass
+    except Exception as e:
+        print(f"[ERROR] Could not retrieve task exception: {e}")
+
 async def model_supervisor():
     """Manages the lifecycle of model workers using ModelKey abstraction."""
     while True:
@@ -332,7 +390,8 @@ async def model_supervisor():
             task = asyncio.create_task(model_worker(controller))
             running_tasks[key] = task
             _active_tasks.add(task)
-            task.add_done_callback(_active_tasks.discard)
+            task.add_done_callback(log_task_exceptions)
+            #task.add_done_callback(_active_tasks.discard)
 
         # 3. Kill removed models
         for key in active_keys - desired_keys:
@@ -373,7 +432,7 @@ def is_detector_active(key: ModelKey):
 
 async def model_worker(controller):
     """Isolated loop for a single model/camera pairing."""
-    model_key = ModelKey(controller.video_manager.camera_name, controller.enabled_detector)
+    model_key = controller.key
     try:
         while True:
             # DYNAMIC CHECK: Is my camera-specific task needed right now?
@@ -397,7 +456,7 @@ async def model_worker(controller):
                     for key, message in osc_messages.items():
                         if message is not None:
                             path = "/detect/" + key
-                            print("sending osc message to {}".format(path))
+                            #print("sending osc message to {}".format(path))
                             send_client.send_message(path, message)
                             net_stats.record_send(path, message)
                 else:
@@ -438,10 +497,10 @@ def draw_hud(frame, stats):
     net_stats.check_tick()
     
     # 2. Format the text
-    text = f"OSC out {int(stats.display_out_rate)} mps | {stats.display_out_kbps:.1f}  Kbps | GPU out {int(stats.metal_out_rate)} fps"
+    text = f"OSC out {int(stats.display_rate)} mps | {stats.display_kbps:.1f}  Kbps | GPU out {int(stats.metal_rate)} fps"
     
     # 3. Dynamic color: Green if healthy (<600 msgs), Red if high load
-    color = (0, 255, 0) if stats.display_out_rate < 600 else (0, 0, 255)
+    color = (0, 255, 0) if stats.display_rate < 600 else (0, 0, 255)
     
     # 4. Put Text
     cv2.putText(
@@ -615,7 +674,7 @@ async def cleanup():
 
     # 3. Close Model Controllers
     print(f"Closing {len(model_controllers)} model controllers...")
-    for (cam_name, detector), controller in model_controllers.items():
+    for (cam_name, detector, model_target), controller in model_controllers.items():
         try:
             controller.close()
         except Exception as e:

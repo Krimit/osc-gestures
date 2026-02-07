@@ -163,8 +163,8 @@ class Mediapipe_FaceModule():
         #print("--- loop time %s ms ---" % ((time.time() * 1000) - (timestamp_ms * 1000)))
         self.detector_result = result
         self.mp_image = output_image
-        if self.time_of_last_callback % 10 == 0:
-            print("--- Face model result arrived. time since last result: {} ms ---".format((timestamp_ms - self.time_of_last_callback)))
+        #if self.time_of_last_callback % 10 == 0:
+        #    print("--- Face model result arrived. time since last result: {} ms ---".format((timestamp_ms - self.time_of_last_callback)))
         self.time_of_last_callback = int(round(time.time() * 1000))
 
 
