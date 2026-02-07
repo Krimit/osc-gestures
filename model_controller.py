@@ -43,7 +43,7 @@ class ModelController():
     """
     """
 
-    def __init__(self, video_manager: VideoManager, enabled_detector: Detector, executor, compute_segment: bool = False):
+    def __init__(self, video_manager: VideoManager, enabled_detector: Detector, executor):
         self.video_manager = video_manager
         self.enabled_detector = enabled_detector
         self.hands_module = None
@@ -57,7 +57,6 @@ class ModelController():
         self.original_frame = None
         self.name = enabled_detector.name + "_" + video_manager.camera_name
         self.executor = executor
-        self.compute_segment = compute_segment
         self.num_loops_waiting_for_results = 0
         self.invert_handedness = False
 
@@ -87,9 +86,7 @@ class ModelController():
         elif self.enabled_detector == Detector.FACE:
             self.face_module = Mediapipe_FaceModule()
         elif self.enabled_detector == Detector.SEGMENT:
-            self.segment_module = Mediapipe_SegmentationModule()  
-        if self.compute_segment and not self.segment_module:
-            self.segment_module = Mediapipe_SegmentationModule()     
+            self.segment_module = Mediapipe_SegmentationModule()    
         return self         
 
     def is_open(self):

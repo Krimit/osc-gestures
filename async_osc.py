@@ -27,8 +27,6 @@ from typing import NamedTuple
 # set this to true to debug the raw frame (which is sent to Metal) 
 INCLUDE_ORIGINAL_FRAME_IN_GUI = False
 
-COMPUTE_SEGMENT = True
-
  # Shared executor
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=16)
 
