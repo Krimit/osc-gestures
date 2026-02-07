@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 # to reduce costs, we detect on smaller version of the frame
 RESIZE_DIM = (640, 480)
 
+
 class Detector(Enum):
     HANDS = 1
     FACE = 2
@@ -78,11 +79,6 @@ class ModelController():
             self.hands_module = Mediapipe_HandsModule(
                 invert_handedness=self.invert_handedness
             )
-        elif self.enabled_detector == Detector.HANDS_AND_FACE:
-            self.hands_module = Mediapipe_HandsModule(
-                invert_handedness=self.invert_handedness
-            )
-            self.face_module = Mediapipe_FaceModule()
         elif self.enabled_detector == Detector.FACE:
             self.face_module = Mediapipe_FaceModule()
         elif self.enabled_detector == Detector.SEGMENT:
@@ -224,43 +220,12 @@ class ModelController():
             self.num_loops_waiting_for_results += 1
             return None           
 
-    def detect_hands_and_face_models(self):
-        self.timestamp = int(time.time() * 1000)
-        if not self.is_open():
-            return
-        frame = self.video_manager.capture_frame()
-        if not self.in_progress:
-            self.hands_module.recognize_frame_async(True, frame, self.timestamp)
-            self.face_module.recognize_frame_async(True, frame, self.timestamp)
-            self.in_progress = True
-        if self.hands_module.result_is_ready() and self.face_module.result_is_ready():
-            self.in_progress = False
-            annotated_image, hands_results_dict = self.hands_module.annotate_image(self.hands_module.mp_image)
-            if annotated_image is not None:
-                result_mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=annotated_image)
-                annotated_image, face_results_dict = self.face_module.annotate_image(result_mp_image)
-                self.video_manager.draw(annotated_image)
-                return hands_results_dict | face_results_dict # merge the prediction results
-        elif self.hands_module.result_is_ready():
-            annotated_image, hands_results_dict = self.hands_module.annotate_image(self.hands_module.mp_image)  
-            self.video_manager.draw(annotated_image)
-            return hands_results_dict
-        elif self.face_module.result_is_ready():
-            annotated_image, face_results_dict = self.face_module.annotate_image(self.face_module.mp_image)  
-            self.video_manager.draw(annotated_image)
-            return face_results_dict
-        else:
-            #print("skipping annotation, models not ready")
-            self.video_manager.draw(frame)
-
     async def detect(self):
         match self.enabled_detector:
             case Detector.HANDS:
                 detection = await self.detect_hands_model()
             case Detector.FACE:
                 detection = await self.detect_face_model()
-            case Detector.HANDS_AND_FACE:
-                detection = await self.detect_hands_and_face_models()
             case Detector.SEGMENT:
                 detection = await self.detect_segment()    
             case _:
