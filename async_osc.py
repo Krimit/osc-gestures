@@ -39,6 +39,9 @@ recieve_port = 5061
 send_port = 5056
 send_client = SimpleUDPClient(ip, send_port)
 
+web_interface = WebInterface(port=8181)
+
+
 class ModelKey(NamedTuple):
     camera_name: str
     detector: Detector
@@ -69,6 +72,17 @@ camera_setup = CameraSetup()
 
 W, H = 1280, 720
 SEND_TO_TD = True
+
+class StreamState:
+    """Thread-safe container for the latest visual state."""
+    def __init__(self):
+        self.frame_bytes = None
+        # We use a lock to ensure we don't read a half-written frame
+        self.lock = asyncio.Lock() 
+
+# Initialize globally
+stream_state = StreamState()
+
 
 class NetworkStats:
     def __init__(self, log_interval=1.0):
@@ -472,6 +486,14 @@ async def camera_selection():
             await asyncio.sleep(0.001)   
         await asyncio.sleep(0.1)
 
+def encode_frame_task(frame):
+    """
+    Compresses frame to JPEG. 
+    Running this in a thread is critical for low latency.
+    """
+    # Quality 60 is the sweet spot for iPad streaming (fast + decent looking)
+    ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+    return buffer.tobytes() if ret else None
 
 def draw_hud(frame, stats):
     """
@@ -548,6 +570,23 @@ async def gui_manager_iteration(latest_detections, window_name):
         combined_view = np.vstack(frames_to_stack)
         final_image = draw_hud(combined_view, net_stats)
         cv2.imshow(window_name, final_image)
+
+        # Publish to web for iPad
+        loop = asyncio.get_running_loop()
+        future = loop.run_in_executor(executor, encode_frame_task, final_image)
+        
+        # Callback to update the state when compression is done
+        def update_stream_state(task):
+            try:
+                result = task.result()
+                if result:
+                    # We don't await the lock here to avoid complexity in the callback
+                    # Assignment is atomic enough for this specific use case
+                    stream_state.frame_bytes = result
+            except Exception:
+                pass
+
+        future.add_done_callback(update_stream_state)
 
     # ONE waitKey call to rule them all
     if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -694,6 +733,8 @@ async def cleanup():
             print(f"Error closing bridge {name}: {e}")
     syphon_bridges.clear()
 
+    print("Stopping Web Interface...")
+    await web_interface.stop()    
 
     # 4. Shutdown the ThreadPoolExecutor
     print("Shutting down executor...")
@@ -709,12 +750,13 @@ TEST_MODE = True
 async def main():    
     server = AsyncIOOSCUDPServer((ip, recieve_port), dispatcher, asyncio.get_event_loop())
     transport, protocol = await server.create_serve_endpoint()  # Create datagram endpoint and start serving
-
+    
     tasks = [
         model_supervisor(),       # Manages model worker lifecycles
         camera_selection(), # Manages camera setup phase
         gui_manager(),      # OpenCV debug window
         syphon_manager(),   # GPU / Syphon output
+        web_interface.start() # publish to web for iPad
     ]
 
     # Adjust this as needed when testing
