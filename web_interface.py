@@ -1,22 +1,26 @@
 from aiohttp import web
+
+import asyncio
 import json
 
 class WebInterface:
-    def __init__(self, port=8080):
+    def __init__(self, port=8087, stream_state=None):
         self.port = port
+        self.stream_state = stream_state
         self.app = web.Application()
         self.runner = None
+        self._is_running = True
         self.setup_routes()
 
     def setup_routes(self):
         self.app.router.add_get('/', self.handle_index)
         self.app.router.add_get('/video_feed', self.handle_video_feed)
-        self.app.router.add_post('/api/command', self.handle_command)
+        self.app.router.add_get('/api/status', self.handle_status)
 
     def get_html(self):
         """
-        Returns the HTML for the iPad Control Panel.
-        Includes a responsive video stream and large touch-friendly buttons.
+        Returns HTML with a Split-Screen Layout:
+        [      VIDEO (75%)      ] [ INFO PANEL (25%) ]
         """
         return """
         <!DOCTYPE html>
@@ -24,55 +28,122 @@ class WebInterface:
         <head>
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
             <style>
-                body { background-color: #121212; color: #fff; font-family: sans-serif; margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; }
-                #video-container { flex: 1; display: flex; justify-content: center; align-items: center; background: #000; overflow: hidden; }
-                img { max-width: 100%; max-height: 100%; object-fit: contain; }
-                
-                #controls { height: 40%; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 15px; background: #1e1e1e; }
-                
-                .btn { 
-                    border: none; border-radius: 12px; 
-                    font-size: 18px; font-weight: bold; color: white;
-                    cursor: pointer; transition: opacity 0.2s;
-                    display: flex; align-items: center; justify-content: center;
-                    text-transform: uppercase; letter-spacing: 1px;
+                body { 
+                    background-color: #000; 
+                    color: #fff; 
+                    font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+                    margin: 0; 
+                    padding: 0; 
+                    height: 100vh; 
+                    width: 100vw; 
+                    overflow: hidden; 
+                    display: flex; /* Activate Split Screen */
+                    flex-direction: row; 
                 }
-                .btn:active { opacity: 0.6; transform: scale(0.98); }
-                
-                /* Button Colors */
-                .btn-green { background: #2e7d32; }
-                .btn-red { background: #c62828; }
-                .btn-blue { background: #1565c0; }
-                .btn-grey { background: #424242; }
 
-                /* Specific Grid Areas if needed */
-                .full-width { grid-column: span 2; }
+                /* --- LEFT SIDE: VIDEO --- */
+                #video-container { 
+                    flex: 3; /* Takes up 3/4 of the screen */
+                    display: flex; 
+                    justify-content: center; 
+                    align-items: center; 
+                    background: #000; 
+                    border-right: 1px solid #333;
+                    position: relative;
+                }
+                
+                img { 
+                    max-width: 100%; 
+                    max-height: 100%; 
+                    object-fit: contain; 
+                    display: block; 
+                }
+
+                /* --- RIGHT SIDE: INFO PANEL --- */
+                #info-panel {
+                    flex: 1; /* Takes up 1/4 of the screen */
+                    display: flex;
+                    flex-direction: column;
+                    justify-content: center;
+                    padding: 20px;
+                    background-color: #111;
+                    box-sizing: border-box;
+                    text-align: left;
+                }
+
+                .info-block {
+                    margin-bottom: 40px;
+                }
+
+                .label {
+                    font-size: 14px;
+                    text-transform: uppercase;
+                    color: #888;
+                    letter-spacing: 1px;
+                    margin-bottom: 5px;
+                }
+
+                .value {
+                    font-size: 32px;
+                    font-weight: 700;
+                    color: #eee;
+                    white-space: nowrap;
+                    overflow: hidden;
+                    text-overflow: ellipsis;
+                }
+
+                /* Highlight the 'Next' gesture to make it pop for the performer */
+                .value.next {
+                    color: #4caf50; /* Green */
+                }
+                
+                .value.event {
+                    font-size: 60px; /* Huge Event Number */
+                    color: #2196f3; /* Blue */
+                }
+
             </style>
         </head>
         <body>
+            
             <div id="video-container">
                 <img src="/video_feed" alt="Live Stream" />
             </div>
             
-            <div id="controls">
-                <button class="btn btn-green" onclick="sendCommand('/controller/models/HANDS/on')">Hands ON</button>
-                <button class="btn btn-red"   onclick="sendCommand('/controller/models/HANDS/off')">Hands OFF</button>
-                
-                <button class="btn btn-green" onclick="sendCommand('/controller/models/FACE/on')">Face ON</button>
-                <button class="btn btn-red"   onclick="sendCommand('/controller/models/FACE/off')">Face OFF</button>
-                
-                <button class="btn btn-blue full-width" onclick="sendCommand('/controller/cameras/start')">Start Cameras</button>
-                <button class="btn btn-grey full-width" onclick="sendCommand('/controller/cameras/stop')">Stop Cameras</button>
+            <div id="info-panel">
+                <div class="info-block">
+                    <div class="label">Event Number</div>
+                    <div class="value event" id="event-display">--</div>
+                </div>
+
+                <div class="info-block">
+                    <div class="label">Current Gesture</div>
+                    <div class="value" id="current-display">Waiting...</div>
+                </div>
+
+                <div class="info-block">
+                    <div class="label">Next Gesture</div>
+                    <div class="value next" id="next-display">Waiting...</div>
+                </div>
             </div>
 
             <script>
-                function sendCommand(addr, args=[]) {
-                    fetch('/api/command', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({address: addr, args: args})
-                    }).catch(console.error);
+                // Function to poll the server for the latest text data
+                async function updateStatus() {
+                    try {
+                        const response = await fetch('/api/status');
+                        const data = await response.json();
+
+                        document.getElementById('event-display').innerText = data.event;
+                        document.getElementById('current-display').innerText = data.current || "-";
+                        document.getElementById('next-display').innerText = data.next || "-";
+                    } catch (e) {
+                        console.error("Status fetch failed", e);
+                    }
                 }
+
+                // Update every 200ms (5 times a second)
+                setInterval(updateStatus, 200);
             </script>
         </body>
         </html>
@@ -81,41 +152,35 @@ class WebInterface:
     async def handle_index(self, request):
         return web.Response(text=self.get_html(), content_type='text/html')
 
-    async def handle_command(self, request):
-        """Receives JSON commands from iPad and injects them into the OSC system."""
-        try:
-            data = await request.json()
-            address = data.get('address')
-            args = data.get('args', [])
+    async def handle_status(self, request):
+        """API Endpoint that returns the current StreamState as JSON"""
+        if self.stream_state:
+            data = {
+                "event": self.stream_state.event_number,
+                "current": self.stream_state.current_gesture,
+                "next": self.stream_state.next_gesture
+            }
+        else:
+            data = {"event": -1, "current": "Error", "next": "No State"}
             
-            print(f"[WEB] Received command: {address} {args}")
-            
-            # Reuse your existing injection logic!
-            inject_osc_message(address, args)
-            
-            return web.Response(text="OK")
-        except Exception as e:
-            return web.Response(text=str(e), status=500)
-
-
-
+        return web.json_response(data)
 
     async def handle_video_feed(self, request):
         """MJPEG Streaming Endpoint"""
         boundary = "frame"
         response = web.StreamResponse(status=200, reason='OK', headers={
-            'Content-Type': f'multipart/x-mixed-replace;boundary={boundary}'
+            'Content-Type': f'multipart/x-mixed-replace; boundary={boundary}'
         })
         await response.prepare(request)
 
         last_sent_id = -1 
 
         try:
-            while True:
+            while self._is_running:
                 # Check if we have a new frame compared to last time
-                if stream_state.frame_bytes and stream_state.frame_id > last_sent_id:
-                    frame_data = stream_state.frame_bytes
-                    last_sent_id = stream_state.frame_id
+                if self.stream_state and self.stream_state.frame_bytes and self.stream_state.frame_id > last_sent_id:
+                    frame_data = self.stream_state.frame_bytes
+                    last_sent_id = self.stream_state.frame_id
 
                     await response.write(
                         f'--{boundary}\r\n'.encode() +
@@ -130,8 +195,13 @@ class WebInterface:
                     # No new frame yet, sleep a bit to yield control
                     await asyncio.sleep(0.01)
                     
-        except (ConnectionResetError,  web.HTTPException):
+        except (ConnectionResetError, web.HTTPException):
+            # Normal client disconnection
+            print("[WEB] Client disconnected from video feed.")
             pass
+        except Exception as e:
+            # 4. Catch the crash! This usually reveals the 'NameError' or logic bug.
+            print(f"[ERROR] Video Feed Crashed: {e}")
         return response
 
 
@@ -143,5 +213,6 @@ class WebInterface:
         await site.start()
 
     async def stop(self):
+        self._is_running = False
         if self.runner:
             await self.runner.cleanup()

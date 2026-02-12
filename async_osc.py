@@ -42,9 +42,6 @@ recieve_port = 5061
 send_port = 5056
 send_client = SimpleUDPClient(ip, send_port)
 
-web = WebInterface(port=8191)
-
-
 class ModelKey(NamedTuple):
     camera_name: str
     detector: Detector
@@ -81,11 +78,13 @@ class StreamState:
     def __init__(self):
         self.frame_bytes = None
         self.frame_id = 0
-        # We use a lock to ensure we don't read a half-written frame
-        self.lock = asyncio.Lock() 
+        self.event_number = -1
+        self.current_gesture = None
+        self.next_gesture = None
 
-# Initialize globally
-stream_state = StreamState()
+# Web page for performer tracking.
+stream_state = StreamState() # Initialize globally
+web = WebInterface(port=8191, stream_state=stream_state)
 
 
 class NetworkStats:
@@ -346,6 +345,31 @@ def handle_models(address: str, *args: List[Any]) -> None:
     else:
         print("unrecognized command: " + command)            
 
+
+def handle_feedback(address: str, *args: List[Any]) -> None:
+    print("address: {}, message: {}".format(address, args))
+    # We expect 3 args {event number, current gesture, next gesture}
+    if not len(args) == 3:
+        print("Unexpected dispatcher arguments for {}: {}".format(address, args))
+        return
+
+    # Check that address is expected
+    if not address in ["/feedback/events"]:
+        print("Unexpected dispatcher address: {}".format(address))
+        return
+
+    global stream_state
+
+    command = address.removeprefix("/feedback/")
+    if command == "events":
+        print(f"Got an event change: {args}")
+        stream_state.event_number = args[0]
+        stream_state.current_gesture = args[1]
+        stream_state.next_gesture = args[2]
+    else:
+        print("unrecognized command: " + command)
+
+
 dispatcher = Dispatcher()
 
 # @deprecated
@@ -357,6 +381,9 @@ dispatcher.map("/controller/cameras*", handle_cameras)
 
 # handle the model lifecycle to start or stop them
 dispatcher.map("/controller/models*", handle_models)
+
+# handle feedback during the performance to track instructions.
+dispatcher.map("/feedback/events*", handle_feedback)
 
 def compute_60fps_sleep_time(start_time):
     target_fps = 60
@@ -591,7 +618,7 @@ async def gui_manager_iteration(latest_detections, window_name):
 
         future.add_done_callback(update_stream_state)
 
-    # ONE waitKey call to rule them all
+    # Need to wait, otherwise drawing doesn't get a chance to happen
     if cv2.waitKey(1) & 0xFF == ord('q'):
         return False
     return True    
@@ -617,8 +644,8 @@ def publish_to_metal(bridge, frame):
 #@timeit_async
 async def syphon_manager_iteration(loop, latest_detections, syphon_bridges):
     segment_detections = [
-        d for d in latest_detections.values() 
-        if d.detector == Detector.SEGMENT
+        d for d in latest_detections.values()
+        if d and d.detector == Detector.SEGMENT
     ]
 
     if not segment_detections:
