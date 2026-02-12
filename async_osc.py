@@ -576,7 +576,7 @@ def publish_to_metal(bridge, frame):
 async def syphon_manager_iteration(loop, latest_detections, syphon_bridges):
     segment_detections = [
         d for d in latest_detections.values() 
-        if d.detector == Detector.SEGMENT
+        if d and d.detector == Detector.SEGMENT
     ]
 
     if not segment_detections:
