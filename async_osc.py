@@ -12,6 +12,8 @@ from setup_cameras import CameraSetup
 from model_controller import ModelController, Detector, DetectedFrame
 from model_target import ModelTarget
 
+from typing import NamedTuple
+
 import sys
 import traceback
 import concurrent.futures
@@ -25,7 +27,8 @@ from metal_video_bridge import MetalVideoBridge
 from syphon import SyphonMetalServer
 import objc
 
-from typing import NamedTuple
+from web_interface import WebInterface
+
 
 
 # set this to true to debug the raw frame (which is sent to Metal) 
@@ -39,7 +42,7 @@ recieve_port = 5061
 send_port = 5056
 send_client = SimpleUDPClient(ip, send_port)
 
-web_interface = WebInterface(port=8181)
+web = WebInterface(port=8191)
 
 
 class ModelKey(NamedTuple):
@@ -77,6 +80,7 @@ class StreamState:
     """Thread-safe container for the latest visual state."""
     def __init__(self):
         self.frame_bytes = None
+        self.frame_id = 0
         # We use a lock to ensure we don't read a half-written frame
         self.lock = asyncio.Lock() 
 
@@ -580,9 +584,8 @@ async def gui_manager_iteration(latest_detections, window_name):
             try:
                 result = task.result()
                 if result:
-                    # We don't await the lock here to avoid complexity in the callback
-                    # Assignment is atomic enough for this specific use case
                     stream_state.frame_bytes = result
+                    stream_state.frame_id += 1 # Increment ID
             except Exception:
                 pass
 
@@ -734,7 +737,7 @@ async def cleanup():
     syphon_bridges.clear()
 
     print("Stopping Web Interface...")
-    await web_interface.stop()    
+    await web.stop()    
 
     # 4. Shutdown the ThreadPoolExecutor
     print("Shutting down executor...")
@@ -756,7 +759,7 @@ async def main():
         camera_selection(), # Manages camera setup phase
         gui_manager(),      # OpenCV debug window
         syphon_manager(),   # GPU / Syphon output
-        web_interface.start() # publish to web for iPad
+        web.start() # publish to web for iPad
     ]
 
     # Adjust this as needed when testing

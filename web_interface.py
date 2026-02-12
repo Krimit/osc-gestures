@@ -97,6 +97,9 @@ class WebInterface:
         except Exception as e:
             return web.Response(text=str(e), status=500)
 
+
+
+
     async def handle_video_feed(self, request):
         """MJPEG Streaming Endpoint"""
         boundary = "frame"
@@ -105,13 +108,15 @@ class WebInterface:
         })
         await response.prepare(request)
 
+        last_sent_id = -1 
+
         try:
             while True:
-                # Non-blocking check for new frame
-                async with stream_state.lock:
+                # Check if we have a new frame compared to last time
+                if stream_state.frame_bytes and stream_state.frame_id > last_sent_id:
                     frame_data = stream_state.frame_bytes
-                
-                if frame_data:
+                    last_sent_id = stream_state.frame_id
+
                     await response.write(
                         f'--{boundary}\r\n'.encode() +
                         b'Content-Type: image/jpeg\r\n' +
@@ -119,14 +124,16 @@ class WebInterface:
                         frame_data + 
                         b'\r\n'
                     )
-                    # Cap at ~30fps to save bandwidth
-                    await asyncio.sleep(0.033)
+                    # aggressive wait: we can check frequently because check is cheap
+                    await asyncio.sleep(0.016) 
                 else:
-                    await asyncio.sleep(0.1)
-        except ConnectionResetError:
-            # Normal when user closes tab
+                    # No new frame yet, sleep a bit to yield control
+                    await asyncio.sleep(0.01)
+                    
+        except (ConnectionResetError,  web.HTTPException):
             pass
         return response
+
 
     async def start(self):
         self.runner = web.AppRunner(self.app)
