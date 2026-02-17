@@ -775,7 +775,7 @@ async def cleanup():
     print("--- Shutdown Complete ---")
 
 # When enabled, test python code without a MaxMsp dependancy. Turn this OFF when using MaxMsp!
-TEST_MODE = True
+TEST_MODE = False
 
 async def main():    
     server = AsyncIOOSCUDPServer((ip, recieve_port), dispatcher, asyncio.get_event_loop())
