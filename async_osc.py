@@ -12,6 +12,8 @@ from setup_cameras import CameraSetup
 from model_controller import ModelController, Detector, DetectedFrame
 from model_target import ModelTarget
 
+from typing import NamedTuple
+
 import sys
 import traceback
 import concurrent.futures
@@ -25,7 +27,8 @@ from metal_video_bridge import MetalVideoBridge
 from syphon import SyphonMetalServer
 import objc
 
-from typing import NamedTuple
+from web_interface import WebInterface
+
 
 
 # set this to true to debug the raw frame (which is sent to Metal) 
@@ -69,6 +72,20 @@ camera_setup = CameraSetup()
 
 W, H = 1280, 720
 SEND_TO_TD = True
+
+class StreamState:
+    """Thread-safe container for the latest visual state."""
+    def __init__(self):
+        self.frame_bytes = None
+        self.frame_id = 0
+        self.event_number = -1
+        self.current_gesture = None
+        self.next_gesture = None
+
+# Web page for performer tracking.
+stream_state = StreamState() # Initialize globally
+web = WebInterface(port=8191, stream_state=stream_state)
+
 
 class NetworkStats:
     def __init__(self, log_interval=1.0):
@@ -328,6 +345,31 @@ def handle_models(address: str, *args: List[Any]) -> None:
     else:
         print("unrecognized command: " + command)            
 
+
+def handle_feedback(address: str, *args: List[Any]) -> None:
+    print("address: {}, message: {}".format(address, args))
+    # We expect 3 args {event number, current gesture, next gesture}
+    if not len(args) == 3:
+        print("Unexpected dispatcher arguments for {}: {}".format(address, args))
+        return
+
+    # Check that address is expected
+    if not address in ["/feedback/events"]:
+        print("Unexpected dispatcher address: {}".format(address))
+        return
+
+    global stream_state
+
+    command = address.removeprefix("/feedback/")
+    if command == "events":
+        print(f"Got an event change: {args}")
+        stream_state.event_number = args[0]
+        stream_state.current_gesture = args[1]
+        stream_state.next_gesture = args[2]
+    else:
+        print("unrecognized command: " + command)
+
+
 dispatcher = Dispatcher()
 
 # @deprecated
@@ -339,6 +381,9 @@ dispatcher.map("/controller/cameras*", handle_cameras)
 
 # handle the model lifecycle to start or stop them
 dispatcher.map("/controller/models*", handle_models)
+
+# handle feedback during the performance to track instructions.
+dispatcher.map("/feedback/events*", handle_feedback)
 
 def compute_60fps_sleep_time(start_time):
     target_fps = 60
@@ -472,6 +517,14 @@ async def camera_selection():
             await asyncio.sleep(0.001)   
         await asyncio.sleep(0.1)
 
+def encode_frame_task(frame):
+    """
+    Compresses frame to JPEG. 
+    Running this in a thread is critical for low latency.
+    """
+    # Quality 60 is the sweet spot for iPad streaming (fast + decent looking)
+    ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+    return buffer.tobytes() if ret else None
 
 def draw_hud(frame, stats):
     """
@@ -549,7 +602,23 @@ async def gui_manager_iteration(latest_detections, window_name):
         final_image = draw_hud(combined_view, net_stats)
         cv2.imshow(window_name, final_image)
 
-    # ONE waitKey call to rule them all
+        # Publish to web for iPad
+        loop = asyncio.get_running_loop()
+        future = loop.run_in_executor(executor, encode_frame_task, final_image)
+        
+        # Callback to update the state when compression is done
+        def update_stream_state(task):
+            try:
+                result = task.result()
+                if result:
+                    stream_state.frame_bytes = result
+                    stream_state.frame_id += 1 # Increment ID
+            except Exception:
+                pass
+
+        future.add_done_callback(update_stream_state)
+
+    # Need to wait, otherwise drawing doesn't get a chance to happen
     if cv2.waitKey(1) & 0xFF == ord('q'):
         return False
     return True    
@@ -575,8 +644,8 @@ def publish_to_metal(bridge, frame):
 #@timeit_async
 async def syphon_manager_iteration(loop, latest_detections, syphon_bridges):
     segment_detections = [
-        d for d in latest_detections.values() 
-        if d.detector == Detector.SEGMENT
+        d for d in latest_detections.values()
+        if d and d.detector == Detector.SEGMENT
     ]
 
     if not segment_detections:
@@ -694,6 +763,8 @@ async def cleanup():
             print(f"Error closing bridge {name}: {e}")
     syphon_bridges.clear()
 
+    print("Stopping Web Interface...")
+    await web.stop()    
 
     # 4. Shutdown the ThreadPoolExecutor
     print("Shutting down executor...")
@@ -704,17 +775,18 @@ async def cleanup():
     print("--- Shutdown Complete ---")
 
 # When enabled, test python code without a MaxMsp dependancy. Turn this OFF when using MaxMsp!
-TEST_MODE = True
+TEST_MODE = False
 
 async def main():    
     server = AsyncIOOSCUDPServer((ip, recieve_port), dispatcher, asyncio.get_event_loop())
     transport, protocol = await server.create_serve_endpoint()  # Create datagram endpoint and start serving
-
+    
     tasks = [
         model_supervisor(),       # Manages model worker lifecycles
         camera_selection(), # Manages camera setup phase
         gui_manager(),      # OpenCV debug window
         syphon_manager(),   # GPU / Syphon output
+        web.start() # publish to web for iPad
     ]
 
     # Adjust this as needed when testing
