@@ -190,6 +190,7 @@ def handle_cameras(address: str, *args: List[Any]) -> None:
     elif command == "direction":
         # Expects: [camera_name, orientation_string]
         # Example: ["Camera_0", "FLIP_SIDE"]
+        print("changing camera direction.")
         if len(args) != 2:
             print(f"Error: orientation requires [camera_name, mode]. Got: {args}")
             return
@@ -207,7 +208,10 @@ def handle_cameras(address: str, *args: List[Any]) -> None:
 
         manager = camera_setup.video_managers.get(target_cam)
         if manager:
+            print(f"changing camera direction: {target_cam} {mode_str}")
             manager.set_camera_direction(direction)
+        else:
+            print(f"didn't find manager for camera {target_cam}")    
         return    
     else:
         print("unrecognized command: " + command)
