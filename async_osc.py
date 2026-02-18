@@ -274,29 +274,49 @@ def handle_models(address: str, *args: List[Any]) -> None:
     global detectors_to_enabled
     global latest_detections
     global camera_assignments
+    global model_controllers
+    global running_tasks
+    global syphon_bridges
 
     model_instruction = address.removeprefix("/controller/models/").split("/")
 
     if model_instruction[0] == "assign":
+        print(f"Received /assign command. Resetting state with args: {args}")
+
         if latest_detections:
             latest_detections.clear()
-            print("Cleared no longer relevant detections.")
+        if camera_assignments:
+            camera_assignments.clear()
+        for task in running_tasks.values():
+            task.cancel()
+        running_tasks.clear()
+        for controller in model_controllers.values():
+            controller.close()
+        model_controllers.clear()
+        for bridge in syphon_bridges.values():
+            bridge.close()
+        syphon_bridges.clear()  
+        
         print("Selecting models to use and pairing with cameras.")
+        
         if not len(args) >= 2 and not len(args) % 2 == 0:
             print("Unexpected args, must have at least one camera to use, and must have camera-model pairs.")
             return
 
         keys_to_spawn = []
-        camera_assignments.clear() # Reset assignments
 
         # Track which logic flags we need to initialize in detectors_to_enabled
         assigned_modes_present = set()
+        active_cameras = set()
             
         camera_detector_pairs = []
         for i in range(0, len(args), 2):
             camera_name = args[i]
             if camera_name == "None": continue
+            
+            active_cameras.add(camera_name)
             detector_type = Detector[args[i+1]]
+            
             camera_assignments[camera_name] = detector_type
             assigned_modes_present.add(detector_type)
 
@@ -322,12 +342,9 @@ def handle_models(address: str, *args: List[Any]) -> None:
         # Clean up unused cameras
         unique_cameras = set(k.camera_name for k in keys_to_spawn)
         camera_setup.stop_unused_cameras(list(unique_cameras))
+
+        camera_setup.stop_unused_cameras(list(active_cameras))
         
-
-        #This needs to be revisisted, multiple models might need different orientations, so this should happen in the model instead
-        #camera_setup.set_camera_orientation_by_model(camera_name_to_detector)
-
-
         # Initialize controllers using ModelKeys
         # Note: We need to adapt setup_selected_models to accept ModelKeys 
         # or simple list of (cam, detector) tuples. 
