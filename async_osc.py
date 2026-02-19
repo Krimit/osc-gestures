@@ -322,8 +322,9 @@ def handle_models(address: str, *args: List[Any]) -> None:
 
             # Determine which physical controllers (ModelKeys) to create
             if detector_type == Detector.HANDS_AND_FACE:
-                keys_to_spawn.append(ModelKey(camera_name, Detector.HANDS, ModelTarget.HANDS_FRONT))
-                keys_to_spawn.append(ModelKey(camera_name, Detector.FACE, ModelTarget.FACE))
+                keys_to_spawn.append(ModelKey(camera_name, Detector.HANDS_AND_FACE, ModelTarget.HANDS_FRONT))
+                #keys_to_spawn.append(ModelKey(camera_name, Detector.HANDS, ModelTarget.HANDS_FRONT))
+                #keys_to_spawn.append(ModelKey(camera_name, Detector.FACE, ModelTarget.FACE))
             elif detector_type == Detector.HANDS:
                 keys_to_spawn.append(ModelKey(camera_name, detector_type, ModelTarget.HANDS_BACK))
             elif detector_type == Detector.FACE:
