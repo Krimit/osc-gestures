@@ -124,12 +124,13 @@ class ModelController():
         frame = await loop.run_in_executor(self.executor, self.video_manager.capture_frame)
         return frame
 
-    async def _get_annotated_frame(self, module, frame):
+    async def _get_annotated_frame(self, module, frame, result):
         loop = asyncio.get_running_loop()
         annotated_frame, results_dict = await loop.run_in_executor(
             self.executor, 
             module.annotate_image, 
             frame,
+            result,
             self.name
         )
         return annotated_frame, results_dict
@@ -172,7 +173,7 @@ class ModelController():
             #print("Got result! Hands={}, segment={}".format(self.hands_module.result_is_ready(), self.segment_can_continue()))
             #if self.num_loops_waiting_for_results > 2:
             #    print("hands result after {} loops".format(self.num_loops_waiting_for_results))
-            annotated_image, results_dict = await self._get_annotated_frame(self.hands_module, self.hands_module.frame) #self.face_module.annotate_image(self.face_module.frame, self.name)
+            annotated_image, results_dict = await self._get_annotated_frame(self.hands_module, self.hands_module.frame, self.hands_module.consume_result())
             self.in_progress = False
             self.num_loops_waiting_for_results = 0
             detection = DetectedFrame(self.name, None, annotated_image, results_dict, self.enabled_detector)
@@ -195,7 +196,7 @@ class ModelController():
         if self.face_module.result_is_ready():
             #if self.num_loops_waiting_for_results > 2:
             #    print("face result after {} loops".format(self.num_loops_waiting_for_results))
-            annotated_image, results_dict = await self._get_annotated_frame(self.face_module, self.face_module.frame) #self.face_module.annotate_image(self.face_module.frame, self.name)
+            annotated_image, results_dict = await self._get_annotated_frame(self.face_module, self.face_module.frame, self.face_module.consume_result())
             self.in_progress = False
             self.num_loops_waiting_for_results = 0
             detection = DetectedFrame(self.name, None, annotated_image, results_dict, self.enabled_detector)
@@ -225,10 +226,10 @@ class ModelController():
             
             # 3. Chain Drawing (Hands -> Face -> Result)
             # Draw Hands on original frame
-            frame_with_hands, hands_dict = await self._get_annotated_frame(self.hands_module, self.hands_module.frame)
+            frame_with_hands, hands_dict = await self._get_annotated_frame(self.hands_module, self.hands_module.frame, self.hands_module.consume_result())
             
             # Draw Face on top of the Hands frame
-            final_frame, face_dict = await self._get_annotated_frame(self.face_module, frame_with_hands)
+            final_frame, face_dict = await self._get_annotated_frame(self.face_module, frame_with_hands, self.face_module.consume_result())
 
             # Combine Results dictionaries
             combined_dict = {}
