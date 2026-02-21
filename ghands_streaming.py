@@ -175,13 +175,18 @@ class Mediapipe_HandsModule():
     def result_is_ready(self):
         return self.gesture_result is not None
 
-    def annotate_image(self, frame, camera_name):
-        if not self.result_is_ready():
-            return None
-        annotated_image = self.draw_landmarks_on_image(frame, self.gesture_result)
-        #print("akrim type of hands annotated_image {}".format(type(annotated_image)))
-        result_dict = self.stringify_detection(self.gesture_result)
+    def consume_result(self):
+        """Grabs the current result and resets the state for the next inference."""
+        local_res = self.gesture_result
         self.gesture_result = None
+        return local_res    
+
+    def annotate_image(self, frame, result, camera_name):
+        if result is None:
+            return None, {}
+        annotated_image = self.draw_landmarks_on_image(frame, result)
+        result_dict = self.stringify_detection(result)
+        
         # Add text overlay to the individual frame
         label = f"{camera_name}"
         cv2.putText(annotated_image, label, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 3)
@@ -242,7 +247,7 @@ if __name__ == "__main__":
 
                 hands_module.recognize_frame_async(True, frame, timestamp)
                 if hands_module.result_is_ready():
-                    annotated_image, results_dict = hands_module.annotate_image(hands_module.frame, "testing")  
+                    annotated_image, results_dict = hands_module.annotate_image(hands_module.frame, hands_module.consume_result(), "testing")  
                     video_manager.draw(annotated_image)
                     print(results_dict.values())
                 else:

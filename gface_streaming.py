@@ -171,20 +171,20 @@ class Mediapipe_FaceModule():
     def result_is_ready(self):
         return self.detector_result is not None
 
-    def annotate_image(self, frame, camera_name):
-        start_time = time.time()
-        if not self.result_is_ready():
-            return None
+    def consume_result(self):
+        """Grabs the current result and resets the state for the next inference."""
         local_res = self.detector_result
         self.detector_result = None
-        annotated_image = self.draw_landmarks_on_image(frame, local_res, time.time())
-        #annotated_image = self.draw_landmarks_on_image(mp_image.numpy_view(), local_res, time.time())
-        #print("akrim type of face annotated_image {}".format(type(annotated_image)))
-        result_dict = self.stringify_detection(local_res)
-        #self.log_time("annotate_image", start_time)  
-        #print("result: {}". format(result_dict))
+        return local_res        
 
-        # Add text overlay to the individual frame
+    def annotate_image(self, frame, result, camera_name):
+        start_time = time.time()
+        if result is None:
+            return None, {}
+
+        annotated_image = self.draw_landmarks_on_image(frame, result, time.time())
+        result_dict = self.stringify_detection(result)
+
         label = f"{camera_name}"
         cv2.putText(annotated_image, label, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 3)
         return annotated_image, result_dict
@@ -234,7 +234,7 @@ async def main(face_module, video_manager):
 
         face_module.recognize_frame_async(True, frame, timestamp)
         if face_module.result_is_ready():
-            annotated_image, results_dict = face_module.annotate_image(face_module.frame)  
+            annotated_image, results_dict = face_module.annotate_image(face_module.frame, face_module.consume_result(), "testing")  
             video_manager.draw(annotated_image)
             print("result values: {}".format(results_dict.values()))
         else:

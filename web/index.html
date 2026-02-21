@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="stats-hud">
+    OSC: <span id="osc-val">0</span> m/s &nbsp;|&nbsp; GPU: <span id="gpu-val">0</span> fps
+</div>
+
+<div id="video-container">
+    <div class="video-cell">
+        <img src="/video/0" class="stream-img">
+    </div>
+    <div class="video-cell">
+        <img src="/video/1" class="stream-img">
+    </div>
+</div>
+
+<div id="performance-footer">
+    <div class="footer-content">
+        <div id="event-num">0</div>
+        <div class="gesture-item">
+            <span class="label">Current Gesture</span>
+            <span id="curr-g-val" class="value">--</span>
+        </div>
+        <div class="gesture-item">
+            <span class="label">Next Gesture</span>
+            <span id="next-g-val" class="value" style="color: #f0f;">--</span>
+        </div>
+    </div>
+</div>
+
+<script>
+    const images = document.querySelectorAll('.stream-img');
+    images.forEach(img => {
+        img.onerror = () => img.parentElement.style.display = 'none';
+        img.onload = () => img.parentElement.style.display = 'flex';
+    });
+
+    async function update() {
+        try {
+            const r = await fetch('/api/status');
+            const d = await r.json();
+            document.getElementById('event-num').innerText = d.event;
+            document.getElementById('curr-g-val').innerText = d.current || "IDLE";
+            document.getElementById('next-g-val').innerText = d.next || "END";
+            document.getElementById('osc-val').innerText = Math.round(d.mps_osc);
+            document.getElementById('gpu-val').innerText = Math.round(d.fps_gpu);
+        } catch(e) {}
+    }
+    setInterval(update, 100);
+</script>
+</body>
+</html>

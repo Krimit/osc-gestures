@@ -2,6 +2,8 @@ from pythonosc.osc_server import AsyncIOOSCUDPServer
 from pythonosc.dispatcher import Dispatcher
 from pythonosc.osc_message_builder import OscMessageBuilder
 
+import argparse
+
 import cv2
 from typing import List, Any
 import asyncio
@@ -27,8 +29,7 @@ from metal_video_bridge import MetalVideoBridge
 from syphon import SyphonMetalServer
 import objc
 
-from web_interface import WebInterface
-
+from web.web_interface import WebInterface
 
 
 # set this to true to debug the raw frame (which is sent to Metal) 
@@ -73,19 +74,51 @@ camera_setup = CameraSetup()
 W, H = 1280, 720
 SEND_TO_TD = True
 
+
+
 class StreamState:
-    """Thread-safe container for the latest visual state."""
     def __init__(self):
-        self.frame_bytes = None
-        self.frame_id = 0
+        # Data
+        self.frames = {}       # { "Camera_0_HANDS": ndarray, ... }
+        self.frame_bytes = {}  # { "0": jpeg_bytes, "1": jpeg_bytes } for web
+        self.frame_ids = {}    
+        # Logic State
         self.event_number = -1
         self.current_gesture = None
         self.next_gesture = None
+        # Stats
+        self.mps_osc = 0
+        self.fps_gpu = 0
+
 
 # Web page for performer tracking.
 stream_state = StreamState() # Initialize globally
-web = WebInterface(port=8191, stream_state=stream_state)
+# use port 80, which allows client to skip setting the port entirely!
+web = WebInterface(port=80, stream_state=stream_state) # otherwise use port=8191
 
+
+class LaptopDebugger:
+    """The 'Local View' - Responsible for the laptop's OpenCV window."""
+    def __init__(self, window_name="Hollow Man Debug View"):
+        self.window_name = window_name
+        cv2.namedWindow(self.window_name)
+
+    def update(self, frames_dict, stats):
+        frames_to_stack = []
+        for name in sorted(frames_dict.keys()):
+            frame = frames_dict[name]
+            if frame is not None:
+                frames_to_stack.append(resize_frame(frame))
+
+        if frames_to_stack:
+            combined = np.vstack(frames_to_stack)
+            # Use your existing draw_hud logic here
+            final_image = draw_hud(combined, stats)
+            cv2.imshow(self.window_name, final_image)
+            return cv2.waitKey(1) & 0xFF != ord('q')
+        return True
+
+local_view = LaptopDebugger()
 
 class NetworkStats:
     def __init__(self, log_interval=1.0):
@@ -274,36 +307,57 @@ def handle_models(address: str, *args: List[Any]) -> None:
     global detectors_to_enabled
     global latest_detections
     global camera_assignments
+    global model_controllers
+    global running_tasks
+    global syphon_bridges
 
     model_instruction = address.removeprefix("/controller/models/").split("/")
 
     if model_instruction[0] == "assign":
+        print(f"Received /assign command. Resetting state with args: {args}")
+
         if latest_detections:
             latest_detections.clear()
-            print("Cleared no longer relevant detections.")
+        if camera_assignments:
+            camera_assignments.clear()
+        for task in running_tasks.values():
+            task.cancel()
+        running_tasks.clear()
+        for controller in model_controllers.values():
+            controller.close()
+        model_controllers.clear()
+        for bridge in syphon_bridges.values():
+            bridge.close()
+        syphon_bridges.clear()  
+        
         print("Selecting models to use and pairing with cameras.")
+        
         if not len(args) >= 2 and not len(args) % 2 == 0:
             print("Unexpected args, must have at least one camera to use, and must have camera-model pairs.")
             return
 
         keys_to_spawn = []
-        camera_assignments.clear() # Reset assignments
 
         # Track which logic flags we need to initialize in detectors_to_enabled
         assigned_modes_present = set()
+        active_cameras = set()
             
         camera_detector_pairs = []
         for i in range(0, len(args), 2):
             camera_name = args[i]
             if camera_name == "None": continue
+            
+            active_cameras.add(camera_name)
             detector_type = Detector[args[i+1]]
+            
             camera_assignments[camera_name] = detector_type
             assigned_modes_present.add(detector_type)
 
             # Determine which physical controllers (ModelKeys) to create
             if detector_type == Detector.HANDS_AND_FACE:
-                keys_to_spawn.append(ModelKey(camera_name, Detector.HANDS, ModelTarget.HANDS_FRONT))
-                keys_to_spawn.append(ModelKey(camera_name, Detector.FACE, ModelTarget.FACE))
+                keys_to_spawn.append(ModelKey(camera_name, Detector.HANDS_AND_FACE, ModelTarget.HANDS_FRONT))
+                #keys_to_spawn.append(ModelKey(camera_name, Detector.HANDS, ModelTarget.HANDS_FRONT))
+                #keys_to_spawn.append(ModelKey(camera_name, Detector.FACE, ModelTarget.FACE))
             elif detector_type == Detector.HANDS:
                 keys_to_spawn.append(ModelKey(camera_name, detector_type, ModelTarget.HANDS_BACK))
             elif detector_type == Detector.FACE:
@@ -322,12 +376,9 @@ def handle_models(address: str, *args: List[Any]) -> None:
         # Clean up unused cameras
         unique_cameras = set(k.camera_name for k in keys_to_spawn)
         camera_setup.stop_unused_cameras(list(unique_cameras))
+
+        camera_setup.stop_unused_cameras(list(active_cameras))
         
-
-        #This needs to be revisisted, multiple models might need different orientations, so this should happen in the model instead
-        #camera_setup.set_camera_orientation_by_model(camera_name_to_detector)
-
-
         # Initialize controllers using ModelKeys
         # Note: We need to adapt setup_selected_models to accept ModelKeys 
         # or simple list of (cam, detector) tuples. 
@@ -526,8 +577,7 @@ def encode_frame_task(frame):
     Compresses frame to JPEG. 
     Running this in a thread is critical for low latency.
     """
-    # Quality 60 is the sweet spot for iPad streaming (fast + decent looking)
-    ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+    ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
     return buffer.tobytes() if ret else None
 
 def draw_hud(frame, stats):
@@ -575,57 +625,90 @@ def draw_hud(frame, stats):
 
 def resize_frame(frame):
     # Optional: Resize to ensure they match widths
-    target_w = 640
+    target_w = 1024 #640 for low bandwidth. 1280 would be ideal if we weren't stacking frames.
     h, w = frame.shape[:2]
     return cv2.resize(frame, (target_w, int(h * target_w / w)))
 
 #@timeit_async
-async def gui_manager_iteration(latest_detections, window_name):
-    frames_to_stack = []
+async def gui_manager_iteration(latest_detections):
+    # 1. Update Model Stats for the HUD
+    net_stats.check_tick()
+    stream_state.mps_osc = net_stats.display_rate
+    stream_state.fps_gpu = net_stats.metal_rate
+
+    # 2. Update Model Frames
+    current_frames = {}
+    # Sorting ensures consistent stacking order on the laptop
+    sorted_keys = sorted(latest_detections.keys())
     
-    # Pull frames from the shared dictionary
-    # Sorting by key ensures the order (top to bottom) stays consistent
-    for name in sorted(latest_detections.keys()):
+    for i, name in enumerate(sorted_keys):
         detection = latest_detections[name]
-        if detection is None:
-            continue
-        frame = detection.annotated_frame
-        if frame is not None:
-            frame = resize_frame(frame)
-            frames_to_stack.append(frame)
+        if detection and detection.annotated_frame is not None:
+            raw_frame = detection.annotated_frame
+            
+            # Store raw frames for the LaptopDebugger (Local View)
+            current_frames[name] = raw_frame
+            
+            # Prepare JPEGs for the WebInterface (iPad View)
+            loop = asyncio.get_running_loop()
+            jpeg = await loop.run_in_executor(executor, encode_frame_task, raw_frame)
+            if jpeg:
+                stream_state.frame_bytes[str(i)] = jpeg
+                stream_state.frame_ids[str(i)] = stream_state.frame_ids.get(str(i), 0) + 1
 
-        if INCLUDE_ORIGINAL_FRAME_IN_GUI:
-            if detection.original_frame is not None:
-                original_frame = resize_frame(detection.original_frame)
-                frames_to_stack.append(original_frame)
+    # 3. Trigger the Local View (Laptop Debugger)
+    # This draws the vertical stack + HUD on your laptop screen
+    active = local_view.update(current_frames, net_stats)
+    return active
 
-    if frames_to_stack:
-        # Stack all frames vertically
-        # Note: All frames must have the same width and channel count
-        combined_view = np.vstack(frames_to_stack)
-        final_image = draw_hud(combined_view, net_stats)
-        cv2.imshow(window_name, final_image)
 
-        # Publish to web for iPad
-        loop = asyncio.get_running_loop()
-        future = loop.run_in_executor(executor, encode_frame_task, final_image)
+
+# async def gui_manager_iteration(latest_detections, window_name):
+#     frames_to_stack = []
+    
+#     # Pull frames from the shared dictionary
+#     # Sorting by key ensures the order (top to bottom) stays consistent
+#     for name in sorted(latest_detections.keys()):
+#         detection = latest_detections[name]
+#         if detection is None:
+#             continue
+#         frame = detection.annotated_frame
+#         if frame is not None:
+#             frame = resize_frame(frame)
+#             frames_to_stack.append(frame)
+
+#         if INCLUDE_ORIGINAL_FRAME_IN_GUI:
+#             if detection.original_frame is not None:
+#                 original_frame = resize_frame(detection.original_frame)
+#                 frames_to_stack.append(original_frame)
+
+#     if frames_to_stack:
+#         # Stack all frames vertically
+#         # Note: All frames must have the same width and channel count
+#         combined_view = np.vstack(frames_to_stack)
+#         final_image = draw_hud(combined_view, net_stats)
+#         cv2.imshow(window_name, final_image)
+
+#         # Publish to web for iPad
+#         loop = asyncio.get_running_loop()
+#         future = loop.run_in_executor(executor, encode_frame_task, final_image)
         
-        # Callback to update the state when compression is done
-        def update_stream_state(task):
-            try:
-                result = task.result()
-                if result:
-                    stream_state.frame_bytes = result
-                    stream_state.frame_id += 1 # Increment ID
-            except Exception:
-                pass
+#         # Callback to update the state when compression is done
+#         def update_stream_state(task):
+#             try:
+#                 result = task.result()
+#                 if result:
+#                     stream_state.frame_bytes = result
+#                     stream_state.frame_id += 1 # Increment ID
+#             except Exception:
+#                 pass
 
-        future.add_done_callback(update_stream_state)
+#         future.add_done_callback(update_stream_state)
 
-    # Need to wait, otherwise drawing doesn't get a chance to happen
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        return False
-    return True    
+#     # Need to wait, otherwise drawing doesn't get a chance to happen
+#     if cv2.waitKey(1) & 0xFF == ord('q'):
+#         return False
+#     return True    
         
 
 async def gui_manager():
@@ -635,7 +718,7 @@ async def gui_manager():
 
     while True:
         start_time = asyncio.get_event_loop().time()
-        active = await gui_manager_iteration(latest_detections, window_name)
+        active = await gui_manager_iteration(latest_detections)
         if not active:
             break
 
@@ -702,8 +785,6 @@ async def test_sequence_injector(model_mapping):
     """
     Simulates a sequence of OSC messages to automate the setup process.
     """
-    if not TEST_MODE:
-        return
 
     print("\n[TEST LAYER] Starting automated test sequence...")
     await asyncio.sleep(1)
@@ -778,10 +859,8 @@ async def cleanup():
     cv2.destroyAllWindows()
     print("--- Shutdown Complete ---")
 
-# When enabled, test python code without a MaxMsp dependancy. Turn this OFF when using MaxMsp!
-TEST_MODE = False
-
-async def main():    
+# When in test mode, test python code without a MaxMsp dependancy. Turn this OFF when using MaxMsp!
+async def main(test_mode=False):    
     server = AsyncIOOSCUDPServer((ip, recieve_port), dispatcher, asyncio.get_event_loop())
     transport, protocol = await server.create_serve_endpoint()  # Create datagram endpoint and start serving
     
@@ -797,11 +876,12 @@ async def main():
     #model_mapping = ["Camera_0", "FACE"]
     #model_mapping = ["Camera_0", "HANDS"]
     #model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
-    #model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS"]
-    model_mapping = ["Camera_1", "HANDS_AND_FACE"]
+    model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS_AND_FACE"]
+    #model_mapping = ["Camera_1", "HANDS_AND_FACE"]
 
 
-    if TEST_MODE:
+    if test_mode:
+        print("[INFO] Running in TEST MODE.")
         tasks.append(test_sequence_injector(model_mapping))
 
     try:
@@ -815,8 +895,11 @@ async def main():
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Hollow Men OSC Controller")
+    parser.add_argument('--test', action='store_true', help="Enable test mode to run without MaxMSP dependency.")
+    args = parser.parse_args()
     try:
-        asyncio.run(main())
+        asyncio.run(main(test_mode=args.test))
     except KeyboardInterrupt:
         # This catch prevents the ugly traceback on Ctrl+C
         pass

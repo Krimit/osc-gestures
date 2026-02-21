@@ -76,7 +76,6 @@ class ModelController():
         self.init()
 
     def init(self):
-
         if self.enabled_detector == Detector.HANDS:
             self.hands_module = Mediapipe_HandsModule(
                 model_target=self.model_tagret,
@@ -84,6 +83,12 @@ class ModelController():
             )
         elif self.enabled_detector == Detector.FACE:
             self.face_module = Mediapipe_FaceModule()
+        elif self.enabled_detector == Detector.HANDS_AND_FACE:
+            self.hands_module = Mediapipe_HandsModule(
+                model_target=self.model_tagret,
+                invert_handedness=self.invert_handedness
+            )
+            self.face_module = Mediapipe_FaceModule()    
         elif self.enabled_detector == Detector.SEGMENT:
             self.segment_module = Mediapipe_SegmentationModule()    
         return self         
@@ -119,12 +124,13 @@ class ModelController():
         frame = await loop.run_in_executor(self.executor, self.video_manager.capture_frame)
         return frame
 
-    async def _get_annotated_frame(self, module, frame):
+    async def _get_annotated_frame(self, module, frame, result):
         loop = asyncio.get_running_loop()
         annotated_frame, results_dict = await loop.run_in_executor(
             self.executor, 
             module.annotate_image, 
             frame,
+            result,
             self.name
         )
         return annotated_frame, results_dict
@@ -149,23 +155,25 @@ class ModelController():
             self.segment_module.recognize_frame_async(True, frame, timestamp+1) 
         
 
+    def _submit_inference(self, module, frame, timestamp):
+        """Helper to fire-and-forget an inference request."""
+        module.recognize_frame_async(True, frame, timestamp)
+
     #@timeit_async
     async def detect_hands_model(self):
         time_of_last_callback = self.timestamp
-        if not self.is_open():
-            return None
+        if not self.is_open(): return None
                 
         if not self.in_progress:
             self.original_frame = await self._get_frame()
             self.timestamp = int(time.time() * 1000)
-            small_frame = self.original_frame #small_frame = cv2.resize(self.original_frame, RESIZE_DIM, interpolation=cv2.INTER_AREA)
-            self.hands_module.recognize_frame_async(True, small_frame, self.timestamp)
+            self._submit_inference(self.hands_module, self.original_frame, self.timestamp)
             self.in_progress = True
         if self.hands_module.result_is_ready():
             #print("Got result! Hands={}, segment={}".format(self.hands_module.result_is_ready(), self.segment_can_continue()))
             #if self.num_loops_waiting_for_results > 2:
             #    print("hands result after {} loops".format(self.num_loops_waiting_for_results))
-            annotated_image, results_dict = await self._get_annotated_frame(self.hands_module, self.hands_module.frame) #self.face_module.annotate_image(self.face_module.frame, self.name)
+            annotated_image, results_dict = await self._get_annotated_frame(self.hands_module, self.hands_module.frame, self.hands_module.consume_result())
             self.in_progress = False
             self.num_loops_waiting_for_results = 0
             detection = DetectedFrame(self.name, None, annotated_image, results_dict, self.enabled_detector)
@@ -178,19 +186,17 @@ class ModelController():
     #@timeit_async
     async def detect_face_model(self):
         time_of_last_callback = self.timestamp
-        if not self.is_open():
-            return None
+        if not self.is_open(): return None
                 
         if not self.in_progress:
             self.original_frame = await self._get_frame()
             self.timestamp = int(time.time() * 1000)
-            small_frame = self.original_frame #small_frame = cv2.resize(self.original_frame, RESIZE_DIM, interpolation=cv2.INTER_AREA)
-            self.face_module.recognize_frame_async(True, small_frame, self.timestamp)
+            self._submit_inference(self.face_module, self.original_frame, self.timestamp)
             self.in_progress = True
         if self.face_module.result_is_ready():
             #if self.num_loops_waiting_for_results > 2:
             #    print("face result after {} loops".format(self.num_loops_waiting_for_results))
-            annotated_image, results_dict = await self._get_annotated_frame(self.face_module, self.face_module.frame) #self.face_module.annotate_image(self.face_module.frame, self.name)
+            annotated_image, results_dict = await self._get_annotated_frame(self.face_module, self.face_module.frame, self.face_module.consume_result())
             self.in_progress = False
             self.num_loops_waiting_for_results = 0
             detection = DetectedFrame(self.name, None, annotated_image, results_dict, self.enabled_detector)
@@ -198,6 +204,45 @@ class ModelController():
         else:
             self.num_loops_waiting_for_results += 1
             return None 
+
+    async def detect_hands_and_face_model(self):
+        """
+        Runs both models in parallel, waits for both, and chains the drawing on a single frame.
+        """
+        if not self.is_open(): return None
+
+        # 1. Fire both tasks
+        if not self.in_progress:
+            self.original_frame = await self._get_frame()
+            self.timestamp = int(time.time() * 1000)
+            
+            self._submit_inference(self.hands_module, self.original_frame, self.timestamp)
+            self._submit_inference(self.face_module, self.original_frame, self.timestamp)
+            
+            self.in_progress = True
+
+        # 2. Wait for BOTH results to be ready (Interleaved Wait)
+        if self.hands_module.result_is_ready() and self.face_module.result_is_ready():
+            
+            # 3. Chain Drawing (Hands -> Face -> Result)
+            # Draw Hands on original frame
+            frame_with_hands, hands_dict = await self._get_annotated_frame(self.hands_module, self.hands_module.frame, self.hands_module.consume_result())
+            
+            # Draw Face on top of the Hands frame
+            final_frame, face_dict = await self._get_annotated_frame(self.face_module, frame_with_hands, self.face_module.consume_result())
+
+            # Combine Results dictionaries
+            combined_dict = {}
+            if hands_dict: combined_dict.update(hands_dict)
+            if face_dict: combined_dict.update(face_dict)
+
+            self.in_progress = False
+            self.num_loops_waiting_for_results = 0
+            return DetectedFrame(self.name, None, final_frame, combined_dict, self.enabled_detector)
+        else:
+            # If either one is not ready, we wait.
+            self.num_loops_waiting_for_results += 1
+            return None
 
     #@timeit_async
     async def detect_segment(self):
@@ -229,6 +274,8 @@ class ModelController():
                 detection = await self.detect_hands_model()
             case Detector.FACE:
                 detection = await self.detect_face_model()
+            case Detector.HANDS_AND_FACE:
+                detection = await self.detect_hands_and_face_model()    
             case Detector.SEGMENT:
                 detection = await self.detect_segment()    
             case _:
