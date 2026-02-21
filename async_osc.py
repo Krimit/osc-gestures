@@ -84,7 +84,8 @@ class StreamState:
 
 # Web page for performer tracking.
 stream_state = StreamState() # Initialize globally
-web = WebInterface(port=8191, stream_state=stream_state)
+# use port 80, which allows client to skip setting the port entirely!
+web = WebInterface(port=80, stream_state=stream_state) # otherwise use port=8191
 
 
 class NetworkStats:

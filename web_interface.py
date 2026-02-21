@@ -4,7 +4,7 @@ import asyncio
 import json
 
 class WebInterface:
-    def __init__(self, port=8087, stream_state=None):
+    def __init__(self, port=8191, stream_state=None):
         self.port = port
         self.stream_state = stream_state
         self.app = web.Application()
@@ -19,8 +19,9 @@ class WebInterface:
 
     def get_html(self):
         """
-        Returns HTML with a Split-Screen Layout:
-        [      VIDEO (75%)      ] [ INFO PANEL (25%) ]
+        Returns HTML with a Top/Bottom Layout:
+        [      VIDEO (75vh)       ]
+        [ INFO PANEL (Auto/Row)   ]
         """
         return """
         <!DOCTYPE html>
@@ -34,22 +35,20 @@ class WebInterface:
                     font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
                     margin: 0; 
                     padding: 0; 
-                    height: 100vh; 
                     width: 100vw; 
-                    overflow: hidden; 
-                    display: flex; /* Activate Split Screen */
-                    flex-direction: row; 
+                    overflow-x: hidden;
+                    overflow-y: auto; /* Allows scrolling if text gets extremely long */
                 }
 
-                /* --- LEFT SIDE: VIDEO --- */
+                /* --- TOP SIDE: VIDEO --- */
                 #video-container { 
-                    flex: 3; /* Takes up 3/4 of the screen */
+                    height: 75vh; /* STRICTLY lock video to 75% of the screen height */
+                    width: 100%;
                     display: flex; 
                     justify-content: center; 
                     align-items: center; 
                     background: #000; 
-                    border-right: 1px solid #333;
-                    position: relative;
+                    border-bottom: 1px solid #333;
                 }
                 
                 img { 
@@ -59,20 +58,24 @@ class WebInterface:
                     display: block; 
                 }
 
-                /* --- RIGHT SIDE: INFO PANEL --- */
+                /* --- BOTTOM SIDE: INFO PANEL --- */
                 #info-panel {
-                    flex: 1; /* Takes up 1/4 of the screen */
+                    min-height: 25vh; /* Takes the rest of the screen, but can grow if needed */
+                    width: 100%;
                     display: flex;
-                    flex-direction: column;
-                    justify-content: center;
+                    flex-direction: row; /* Side-by-side layout for the wide bottom bar */
+                    flex-wrap: wrap; /* Safely wrap to a new line on very narrow screens */
+                    justify-content: space-around;
+                    align-items: flex-start;
                     padding: 20px;
                     background-color: #111;
                     box-sizing: border-box;
-                    text-align: left;
+                    text-align: center;
                 }
 
                 .info-block {
-                    margin-bottom: 40px;
+                    margin: 10px 20px;
+                    flex: 1 1 25%; /* Give each block equal room to breathe */
                 }
 
                 .label {
@@ -87,9 +90,10 @@ class WebInterface:
                     font-size: 32px;
                     font-weight: 700;
                     color: #eee;
-                    white-space: nowrap;
-                    overflow: hidden;
-                    text-overflow: ellipsis;
+                    
+                    /* FIXED WRAPPING RULES */
+                    white-space: pre-wrap;     /* Allows text to wrap into new lines natively */
+                    overflow-wrap: break-word; /* Prevents long unbreakable words from blowing out the box */
                 }
 
                 /* Highlight the 'Next' gesture to make it pop for the performer */
