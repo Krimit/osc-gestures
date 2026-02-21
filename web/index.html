@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    
+    <div id="video-container">
+        <img src="/video_feed" alt="Live Stream" />
+    </div>
+    
+    <div id="info-panel">
+        <div class="info-block">
+            <div class="label">Event Number</div>
+            <div class="value event" id="event-display">--</div>
+        </div>
+
+        <div class="info-block">
+            <div class="label">Current Gesture</div>
+            <div class="value" id="current-display">Waiting...</div>
+        </div>
+
+        <div class="info-block">
+            <div class="label">Next Gesture</div>
+            <div class="value next" id="next-display">Waiting...</div>
+        </div>
+    </div>
+
+    <script>
+        async function updateStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+
+                document.getElementById('event-display').innerText = data.event;
+                document.getElementById('current-display').innerText = data.current || "-";
+                document.getElementById('next-display').innerText = data.next || "-";
+            } catch (e) {
+                console.error("Status fetch failed", e);
+            }
+        }
+        setInterval(updateStatus, 200);
+    </script>
+</body>
+</html>

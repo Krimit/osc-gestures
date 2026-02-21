@@ -2,6 +2,8 @@ from pythonosc.osc_server import AsyncIOOSCUDPServer
 from pythonosc.dispatcher import Dispatcher
 from pythonosc.osc_message_builder import OscMessageBuilder
 
+import argparse
+
 import cv2
 from typing import List, Any
 import asyncio
@@ -27,8 +29,7 @@ from metal_video_bridge import MetalVideoBridge
 from syphon import SyphonMetalServer
 import objc
 
-from web_interface import WebInterface
-
+from web.web_interface import WebInterface
 
 
 # set this to true to debug the raw frame (which is sent to Metal) 
@@ -721,8 +722,6 @@ async def test_sequence_injector(model_mapping):
     """
     Simulates a sequence of OSC messages to automate the setup process.
     """
-    if not TEST_MODE:
-        return
 
     print("\n[TEST LAYER] Starting automated test sequence...")
     await asyncio.sleep(1)
@@ -797,10 +796,8 @@ async def cleanup():
     cv2.destroyAllWindows()
     print("--- Shutdown Complete ---")
 
-# When enabled, test python code without a MaxMsp dependancy. Turn this OFF when using MaxMsp!
-TEST_MODE = False
-
-async def main():    
+# When in test mode, test python code without a MaxMsp dependancy. Turn this OFF when using MaxMsp!
+async def main(test_mode=False):    
     server = AsyncIOOSCUDPServer((ip, recieve_port), dispatcher, asyncio.get_event_loop())
     transport, protocol = await server.create_serve_endpoint()  # Create datagram endpoint and start serving
     
@@ -820,7 +817,8 @@ async def main():
     model_mapping = ["Camera_1", "HANDS_AND_FACE"]
 
 
-    if TEST_MODE:
+    if test_mode:
+        print("[INFO] Running in TEST MODE.")
         tasks.append(test_sequence_injector(model_mapping))
 
     try:
@@ -834,8 +832,11 @@ async def main():
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Hollow Men OSC Controller")
+    parser.add_argument('--test', action='store_true', help="Enable test mode to run without MaxMSP dependency.")
+    args = parser.parse_args()
     try:
-        asyncio.run(main())
+        asyncio.run(main(test_mode=args.test))
     except KeyboardInterrupt:
         # This catch prevents the ugly traceback on Ctrl+C
         pass
