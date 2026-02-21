@@ -546,8 +546,7 @@ def encode_frame_task(frame):
     Compresses frame to JPEG. 
     Running this in a thread is critical for low latency.
     """
-    # Quality 60 is the sweet spot for iPad streaming (fast + decent looking)
-    ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 60])
+    ret, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
     return buffer.tobytes() if ret else None
 
 def draw_hud(frame, stats):
@@ -595,7 +594,7 @@ def draw_hud(frame, stats):
 
 def resize_frame(frame):
     # Optional: Resize to ensure they match widths
-    target_w = 640
+    target_w = 1024 #640 for low bandwidth. 1280 would be ideal if we weren't stacking frames.
     h, w = frame.shape[:2]
     return cv2.resize(frame, (target_w, int(h * target_w / w)))
 
@@ -813,8 +812,8 @@ async def main(test_mode=False):
     #model_mapping = ["Camera_0", "FACE"]
     #model_mapping = ["Camera_0", "HANDS"]
     #model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
-    #model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS"]
-    model_mapping = ["Camera_1", "HANDS_AND_FACE"]
+    model_mapping = ["Camera_1", "FACE", "Camera_1", "HANDS_AND_FACE"]
+    #model_mapping = ["Camera_1", "HANDS_AND_FACE"]
 
 
     if test_mode:

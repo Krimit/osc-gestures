@@ -68,10 +68,10 @@ class WebInterface:
                         b'\r\n'
                     )
                     # aggressive wait: we can check frequently because check is cheap
-                    await asyncio.sleep(0.016) 
+                    await asyncio.sleep(0.001)
                 else:
                     # No new frame yet, sleep a bit to yield control
-                    await asyncio.sleep(0.01)
+                    await asyncio.sleep(0.005)
                     
         except (ConnectionResetError, web.HTTPException):
             # Normal client disconnection

@@ -27,6 +27,7 @@ img {
     height: 100%; 
     object-fit: contain; 
     display: block; 
+    image-rendering: high-quality; /* Forces the browser to prioritize rendering sharpness */
 }
 
 /* --- BOTTOM SIDE: INFO PANEL --- */
