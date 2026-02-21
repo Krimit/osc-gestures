@@ -31,22 +31,26 @@ class WebInterface:
         # Serve the CSS file directly from disk
         return web.FileResponse(os.path.join(self.base_dir, 'style.css'))
 
+
     async def handle_status(self, request):
         if not self.stream_state:
-            data = {"event": -1, "current": "Error", "next": "No State", "fps_gpu": "0", "mps_osc": 0}
-        # Include net_stats in the JSON response
+            data = {"event": -1, "current": "Error", "next": "No State", "fps_gpu": 0, "mps_osc": 0, "active_videos": []}
         else:
+            # Send the actual controller names that are active
+            active_ids = list(self.stream_state.frame_bytes.keys())
             data = {
                 "event": self.stream_state.event_number,
                 "current": self.stream_state.current_gesture,
                 "next": self.stream_state.next_gesture,
                 "fps_gpu": self.stream_state.fps_gpu,
-                "mps_osc": self.stream_state.mps_osc
+                "mps_osc": self.stream_state.mps_osc,
+                "active_videos": active_ids,
             }
         return web.json_response(data)
 
+
     async def handle_video_feed(self, request):
-        video_id = request.match_info.get('id', '0')
+        video_id = request.match_info.get('id')
         boundary = "frame"
         response = web.StreamResponse(status=200, headers={
             'Content-Type': f'multipart/x-mixed-replace; boundary={boundary}'
@@ -60,7 +64,7 @@ class WebInterface:
                 frame_data = self.stream_state.frame_bytes.get(video_id)
                 current_id = self.stream_state.frame_ids.get(video_id, -1)
 
-                if frame_data and current_id > last_sent_id:
+                if frame_data and current_id != last_sent_id:
                     last_sent_id = current_id
                     await response.write(
                         f'--{boundary}\r\nContent-Type: image/jpeg\r\n'
@@ -70,6 +74,7 @@ class WebInterface:
                     await asyncio.sleep(0.001)
                 else:
                     # No new frame yet, sleep a bit to yield control
+                    print(f"[WEB DEBUG] Stream {video_id} is starving/idle. current_id: {current_id}")
                     await asyncio.sleep(0.005)
         except (ConnectionResetError, web.HTTPException):
             # Normal client disconnection

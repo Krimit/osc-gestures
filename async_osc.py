@@ -53,7 +53,6 @@ class ModelKey(NamedTuple):
 
 model_controllers: dict[ModelKey, ModelController] = {}
 running_tasks: dict[ModelKey, asyncio.Task] = {}
-camera_assignments: dict[str, Detector] = {}
 
 _active_tasks = set()
 
@@ -89,6 +88,7 @@ class StreamState:
         # Stats
         self.mps_osc = 0
         self.fps_gpu = 0
+        self.active_count = 0
 
 
 # Web page for performer tracking.
@@ -252,7 +252,6 @@ def handle_cameras(address: str, *args: List[Any]) -> None:
 
 def setup_selected_models(keys_to_spawn: list, camera_name_to_camera: dict) -> None:
     global model_controllers
-    global camera_assignments
     # Clear the specific category if needed, or just update
     print(f"setup_selected_models pairs {keys_to_spawn} {camera_name_to_camera}")
     
@@ -306,7 +305,6 @@ def handle_models(address: str, *args: List[Any]) -> None:
 
     global detectors_to_enabled
     global latest_detections
-    global camera_assignments
     global model_controllers
     global running_tasks
     global syphon_bridges
@@ -318,8 +316,6 @@ def handle_models(address: str, *args: List[Any]) -> None:
 
         if latest_detections:
             latest_detections.clear()
-        if camera_assignments:
-            camera_assignments.clear()
         for task in running_tasks.values():
             task.cancel()
         running_tasks.clear()
@@ -350,7 +346,6 @@ def handle_models(address: str, *args: List[Any]) -> None:
             active_cameras.add(camera_name)
             detector_type = Detector[args[i+1]]
             
-            camera_assignments[camera_name] = detector_type
             assigned_modes_present.add(detector_type)
 
             # Determine which physical controllers (ModelKeys) to create
@@ -420,7 +415,13 @@ def handle_feedback(address: str, *args: List[Any]) -> None:
         print(f"Got an event change: {args}")
         stream_state.event_number = args[0]
         stream_state.current_gesture = args[1]
-        stream_state.next_gesture = args[2]
+
+        # Join arbitrary number of arguments for the long instruction
+        # This handles: "lh", "duck", "and", "rh", "open" -> "lh duck and rh open"
+        instruction_text = " ".join(map(str, args[2:]))
+        
+        # Safety net: replace underscores if you're still transitioning Max data
+        stream_state.next_gesture = instruction_text.replace("_", " ")
     else:
         print("unrecognized command: " + command)
 
@@ -504,31 +505,27 @@ async def model_supervisor():
 
 def is_detector_active(key: ModelKey):
     """
-    Determines if a worker should run based on its camera's assigned Master Mode.
+    Determines if a worker should run based purely on its own detector toggle.
+    No master assignments or special treatment.
     """
     camera_name = key.camera_name
     detector_type = key.detector
 
-    # Runs if Segment is manually ON, OR if the Main Assigned Model for this camera is ON.
+    # Piggyback Logic for TouchDesigner Video (Segment)
     if detector_type == Detector.SEGMENT:
+        # Run if manually turned on
         if detectors_to_enabled.get(Detector.SEGMENT, False):
             return True
         
-        # Check if the "Master" assignment for this camera is currently enabled
-        assigned_master = camera_assignments.get(camera_name)
-        if assigned_master and detectors_to_enabled.get(assigned_master, False):
-            return True
+        # Run if ANY other model on this exact camera is currently enabled
+        for controller_key in model_controllers.keys():
+            if controller_key.camera_name == camera_name and controller_key.detector != Detector.SEGMENT:
+                if detectors_to_enabled.get(controller_key.detector, False):
+                    return True
         return False
-
-    # We retrieve what this camera was assigned to (HANDS, FACE, or HANDS_AND_FACE)
-    assigned_master = camera_assignments.get(camera_name)
     
-    if not assigned_master:
-        return False
+    return detectors_to_enabled.get(detector_type, False)
 
-    # The worker runs ONLY if the global toggle for its *Assigned Master Mode* is True.
-    return detectors_to_enabled.get(assigned_master, False)
-          
 
 async def model_worker(controller):
     """Isolated loop for a single model/camera pairing."""
@@ -539,14 +536,11 @@ async def model_worker(controller):
             if not is_detector_active(model_key):
                 if controller.name in latest_detections:
                     latest_detections[controller.name] = None
-                #latest_detections.pop(controller.name)            
-                #print(f"detector {controller.enabled_detector} is not active")
                 await asyncio.sleep(0.1)
                 continue
                 
             start_time = asyncio.get_event_loop().time()
             detection = await controller.detect()
-            #print(f"detector {controller.enabled_detector} got detection")
             
             if detection:
                 entry = {controller.name : detection}
@@ -556,14 +550,19 @@ async def model_worker(controller):
                     for key, message in osc_messages.items():
                         if message is not None:
                             path = "/detect/" + key
-                            #print("sending osc message to {}".format(path))
                             send_client.send_message(path, message)
                             net_stats.record_send(path, message)
                 else:
                     net_stats.record_no_send()
             await asyncio.sleep(0.001)
     except asyncio.CancelledError:
+        pass # Task was intentionally killed
+    finally:
+        # 1. Close hardware connections
         controller.close()
+        # 2. Scrub the ghost frame from the dictionary!
+        if controller.name in latest_detections:
+            latest_detections.pop(controller.name, None)
 
 async def camera_selection():
     while True:
@@ -630,37 +629,120 @@ def resize_frame(frame):
     return cv2.resize(frame, (target_w, int(h * target_w / w)))
 
 #@timeit_async
-async def gui_manager_iteration(latest_detections):
-    # 1. Update Model Stats for the HUD
-    net_stats.check_tick()
-    stream_state.mps_osc = net_stats.display_rate
-    stream_state.fps_gpu = net_stats.metal_rate
+# async def gui_manager_iteration(latest_detections):
+#     net_stats.check_tick()
+#     stream_state.mps_osc = net_stats.display_rate
+#     stream_state.fps_gpu = net_stats.metal_rate
 
-    # 2. Update Model Frames
-    current_frames = {}
-    # Sorting ensures consistent stacking order on the laptop
-    sorted_keys = sorted(latest_detections.keys())
+#     current_frames = {}
+#     # Sorting ensures consistent stacking order on the laptop
+#     sorted_keys = sorted(latest_detections.keys())
     
-    for i, name in enumerate(sorted_keys):
-        detection = latest_detections[name]
-        if detection and detection.annotated_frame is not None:
-            raw_frame = detection.annotated_frame
-            
-            # Store raw frames for the LaptopDebugger (Local View)
-            current_frames[name] = raw_frame
-            
-            # Prepare JPEGs for the WebInterface (iPad View)
-            loop = asyncio.get_running_loop()
-            jpeg = await loop.run_in_executor(executor, encode_frame_task, raw_frame)
-            if jpeg:
-                stream_state.frame_bytes[str(i)] = jpeg
-                stream_state.frame_ids[str(i)] = stream_state.frame_ids.get(str(i), 0) + 1
+#     # 1. Clear old frames so the iPad/Laptop doesn't show "frozen" images
+#     stream_state.frame_bytes.clear() 
 
-    # 3. Trigger the Local View (Laptop Debugger)
-    # This draws the vertical stack + HUD on your laptop screen
-    active = local_view.update(current_frames, net_stats)
-    return active
+#     for i, name in enumerate(sorted_keys):
+#         detection = latest_detections[name]
+#         if detection and detection.annotated_frame is not None:
+#             raw_frame = detection.annotated_frame
+#             current_frames[name] = raw_frame
+            
+#             loop = asyncio.get_running_loop()
+#             jpeg = await loop.run_in_executor(executor, encode_frame_task, raw_frame)
+#             if jpeg:
+#                 # FIX: Use 'name' (e.g. "Camera_1_HANDS") instead of 'str(i)'
+#                 # This matches what we will send in 'active_videos'
+#                 stream_state.frame_bytes[name] = jpeg
+#                 stream_state.frame_ids[name] = stream_state.frame_ids.get(name, 0) + 1
 
+#     active = local_view.update(current_frames, net_stats)
+#     return active
+
+# async def gui_manager_iteration(latest_detections):
+#     net_stats.check_tick()
+#     stream_state.mps_osc = net_stats.display_rate
+#     stream_state.fps_gpu = net_stats.metal_rate
+
+#     current_frames = {}
+#     sorted_keys = sorted(latest_detections.keys())
+    
+#     # 1. Track which models are actually supposed to be running
+#     intended_active_models = set()
+
+#     for name in sorted_keys:
+#         detection = latest_detections[name]
+        
+#         # In model_worker, if a model is turned off, it sets its detection to None.
+#         if detection is None:
+#             continue
+            
+#         intended_active_models.add(name)
+
+#         if detection.annotated_frame is not None:
+#             raw_frame = detection.annotated_frame
+#             current_frames[name] = raw_frame
+            
+#             loop = asyncio.get_running_loop()
+#             jpeg = await loop.run_in_executor(executor, encode_frame_task, raw_frame)
+#             if jpeg:
+#                 stream_state.frame_bytes[name] = jpeg
+#                 stream_state.frame_ids[name] = stream_state.frame_ids.get(name, 0) + 1
+
+#     # 2. Safely clean up ONLY the streams that were explicitly turned off
+#     # This prevents the iPad from thinking a camera died just because it was a millisecond slow
+#     for old_name in list(stream_state.frame_bytes.keys()):
+#         if old_name not in intended_active_models:
+#             del stream_state.frame_bytes[old_name]
+#             if old_name in stream_state.frame_ids:
+#                 del stream_state.frame_ids[old_name]
+
+#     active = local_view.update(current_frames, net_stats)
+#     return active    
+
+#@timeit_async
+# async def gui_manager_iteration(latest_detections):
+#     net_stats.check_tick()
+#     stream_state.mps_osc = net_stats.display_rate
+#     stream_state.fps_gpu = net_stats.metal_rate
+
+#     current_frames = {}
+#     sorted_keys = sorted(latest_detections.keys())
+    
+#     intended_active_models = set()
+    
+#     # SECURITY CHECK: Get a list of the officially active controllers right now
+#     valid_names = {ctrl.name for ctrl in model_controllers.values()}
+
+#     for name in sorted_keys:
+#         # Ignore ghost frames from old/cancelled tasks
+#         if name not in valid_names:
+#             continue
+            
+#         detection = latest_detections[name]
+#         if detection is None:
+#             continue
+            
+#         intended_active_models.add(name)
+
+#         if detection.annotated_frame is not None:
+#             raw_frame = detection.annotated_frame
+#             current_frames[name] = raw_frame
+            
+#             loop = asyncio.get_running_loop()
+#             jpeg = await loop.run_in_executor(executor, encode_frame_task, raw_frame)
+#             if jpeg:
+#                 stream_state.frame_bytes[name] = jpeg
+#                 stream_state.frame_ids[name] = stream_state.frame_ids.get(name, 0) + 1
+
+#     # Safely clean up explicit removals
+#     for old_name in list(stream_state.frame_bytes.keys()):
+#         if old_name not in intended_active_models:
+#             del stream_state.frame_bytes[old_name]
+#             if old_name in stream_state.frame_ids:
+#                 del stream_state.frame_ids[old_name]
+
+#     active = local_view.update(current_frames, net_stats)
+#     return active
 
 
 # async def gui_manager_iteration(latest_detections, window_name):
@@ -710,6 +792,53 @@ async def gui_manager_iteration(latest_detections):
 #         return False
 #     return True    
         
+
+async def gui_manager_iteration(latest_detections):
+    net_stats.check_tick()
+    stream_state.mps_osc = net_stats.display_rate
+    stream_state.fps_gpu = net_stats.metal_rate
+
+    current_frames = {}
+    sorted_keys = sorted(latest_detections.keys())
+    
+    intended_active_models = set()
+    
+    # SECURITY CHECK: Get a list of the officially active controllers right now
+    valid_names = {ctrl.name for ctrl in model_controllers.values()}
+
+    for name in sorted_keys:
+        # Ignore ghost frames from old/cancelled tasks
+        if name not in valid_names:
+            continue
+            
+        detection = latest_detections[name]
+        if detection is None:
+            continue
+            
+        # --- THE FIX: Force web IDs to be strict strings ---
+        web_id = str(name) 
+        intended_active_models.add(web_id)
+
+        if detection.annotated_frame is not None:
+            raw_frame = detection.annotated_frame
+            # Keep the original object key for the local laptop view
+            current_frames[name] = raw_frame
+            
+            loop = asyncio.get_running_loop()
+            jpeg = await loop.run_in_executor(executor, encode_frame_task, raw_frame)
+            if jpeg:
+                stream_state.frame_bytes[web_id] = jpeg
+                stream_state.frame_ids[web_id] = stream_state.frame_ids.get(web_id, 0) + 1
+
+    # Safely clean up explicit removals using the new string keys
+    for old_name in list(stream_state.frame_bytes.keys()):
+        if old_name not in intended_active_models:
+            del stream_state.frame_bytes[old_name]
+            if old_name in stream_state.frame_ids:
+                del stream_state.frame_ids[old_name]
+
+    active = local_view.update(current_frames, net_stats)
+    return active
 
 async def gui_manager():
     global latest_detections
@@ -876,7 +1005,7 @@ async def main(test_mode=False):
     #model_mapping = ["Camera_0", "FACE"]
     #model_mapping = ["Camera_0", "HANDS"]
     #model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
-    model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS_AND_FACE"]
+    model_mapping = ["Camera_1", "FACE", "Camera_1", "HANDS_AND_FACE"]
     #model_mapping = ["Camera_1", "HANDS_AND_FACE"]
 
 

@@ -3,13 +3,12 @@
 html, body {
     height: 100%;
     width: 100%;
-    overflow: hidden; /* Hard ban on all scrolling */
+    overflow: hidden;
     background: #000;
 }
 
 body {
     display: grid;
-    /* Grid forces the middle row to be exactly what's left over */
     grid-template-rows: 40px minmax(0, 1fr) 140px;
     grid-template-columns: 100%;
 }
@@ -24,41 +23,48 @@ body {
     border-bottom: 1px solid #333;
 }
 
-/* THE VIDEO CONTAINER */
 #video-container {
     display: flex;
     gap: 10px;
     padding: 10px;
     background: #000;
-    min-height: 0; /* Critical for grid scaling */
+    min-height: 0;
 }
 
-/* Orientation Logic */
-@media (orientation: landscape) { 
-    #video-container { flex-direction: row; } 
-}
-@media (orientation: portrait) { 
-    #video-container { flex-direction: column; } 
-}
+@media (orientation: landscape) { #video-container { flex-direction: row; } }
+@media (orientation: portrait) { #video-container { flex-direction: column; } }
 
-/* THE JAIL CELL: Forces the video to stay in its 50% share */
-.video-cell {
-    flex: 1 1 50%; /* Each takes exactly half */
+/*.video-cell {
+    flex: 1 1 0; 
     display: flex;
     justify-content: center;
     align-items: center;
-    overflow: hidden; /* If it tries to bleed, it gets cut (safety) */
+    overflow: hidden;
     position: relative;
+    height: 100%;
+    width: 100%;
+    transition: all 0.3s ease; /* Smooth transition when one video disappears
+}
+*/
+
+.video-cell {
+    flex: 1 1 0; /* Grow/Shrink equally based on number of siblings */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+    height: 100%;
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
 }
 
 .stream-img {
-    /* The magic combo: image will shrink until its LARGEST side fits the cell */
     width: 100%;
     height: 100%;
     object-fit: contain; 
 }
 
-/* FOOTER HUD */
 #performance-footer {
     background: #050505;
     border-top: 2px solid #0af;
