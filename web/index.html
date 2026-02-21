@@ -5,42 +5,53 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    
-    <div id="video-container">
-        <img src="/video_feed" alt="Live Stream" />
+
+<div id="stats-hud">
+    OSC: <span id="osc-val">0</span> m/s &nbsp;|&nbsp; GPU: <span id="gpu-val">0</span> fps
+</div>
+
+<div id="video-container">
+    <div class="video-cell">
+        <img src="/video/0" class="stream-img">
     </div>
-    
-    <div id="info-panel">
-        <div class="info-block">
-            <div class="label">Event Number</div>
-            <div class="value event" id="event-display">--</div>
-        </div>
+    <div class="video-cell">
+        <img src="/video/1" class="stream-img">
+    </div>
+</div>
 
-        <div class="info-block">
-            <div class="label">Current Gesture</div>
-            <div class="value" id="current-display">Waiting...</div>
+<div id="performance-footer">
+    <div class="footer-content">
+        <div id="event-num">0</div>
+        <div class="gesture-item">
+            <span class="label">Current Gesture</span>
+            <span id="curr-g-val" class="value">--</span>
         </div>
-
-        <div class="info-block">
-            <div class="label">Next Gesture</div>
-            <div class="value next" id="next-display">Waiting...</div>
+        <div class="gesture-item">
+            <span class="label">Next Gesture</span>
+            <span id="next-g-val" class="value" style="color: #f0f;">--</span>
         </div>
     </div>
+</div>
 
-    <script>
-        async function updateStatus() {
-            try {
-                const response = await fetch('/api/status');
-                const data = await response.json();
+<script>
+    const images = document.querySelectorAll('.stream-img');
+    images.forEach(img => {
+        img.onerror = () => img.parentElement.style.display = 'none';
+        img.onload = () => img.parentElement.style.display = 'flex';
+    });
 
-                document.getElementById('event-display').innerText = data.event;
-                document.getElementById('current-display').innerText = data.current || "-";
-                document.getElementById('next-display').innerText = data.next || "-";
-            } catch (e) {
-                console.error("Status fetch failed", e);
-            }
-        }
-        setInterval(updateStatus, 200);
-    </script>
+    async function update() {
+        try {
+            const r = await fetch('/api/status');
+            const d = await r.json();
+            document.getElementById('event-num').innerText = d.event;
+            document.getElementById('curr-g-val').innerText = d.current || "IDLE";
+            document.getElementById('next-g-val').innerText = d.next || "END";
+            document.getElementById('osc-val').innerText = Math.round(d.mps_osc);
+            document.getElementById('gpu-val').innerText = Math.round(d.fps_gpu);
+        } catch(e) {}
+    }
+    setInterval(update, 100);
+</script>
 </body>
 </html>

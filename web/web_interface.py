@@ -18,9 +18,10 @@ class WebInterface:
 
     def setup_routes(self):
         self.app.router.add_get('/', self.handle_index)
-        self.app.router.add_get('/style.css', self.handle_style) # New route for CSS
-        self.app.router.add_get('/video_feed', self.handle_video_feed)
+        self.app.router.add_get('/style.css', self.handle_style)
         self.app.router.add_get('/api/status', self.handle_status)
+        # Dynamic route: /video/0, /video/1, etc.
+        self.app.router.add_get('/video/{id}', self.handle_video_feed)
 
     async def handle_index(self, request):
         # Serve the HTML file directly from disk
@@ -31,48 +32,45 @@ class WebInterface:
         return web.FileResponse(os.path.join(self.base_dir, 'style.css'))
 
     async def handle_status(self, request):
-        """API Endpoint that returns the current StreamState as JSON"""
-        if self.stream_state:
+        if not self.stream_state:
+            data = {"event": -1, "current": "Error", "next": "No State", "fps_gpu": "0", "mps_osc": 0}
+        # Include net_stats in the JSON response
+        else:
             data = {
                 "event": self.stream_state.event_number,
                 "current": self.stream_state.current_gesture,
-                "next": self.stream_state.next_gesture
+                "next": self.stream_state.next_gesture,
+                "fps_gpu": self.stream_state.fps_gpu,
+                "mps_osc": self.stream_state.mps_osc
             }
-        else:
-            data = {"event": -1, "current": "Error", "next": "No State"}
-            
         return web.json_response(data)
 
     async def handle_video_feed(self, request):
-        """MJPEG Streaming Endpoint"""
+        video_id = request.match_info.get('id', '0')
         boundary = "frame"
-        response = web.StreamResponse(status=200, reason='OK', headers={
+        response = web.StreamResponse(status=200, headers={
             'Content-Type': f'multipart/x-mixed-replace; boundary={boundary}'
         })
         await response.prepare(request)
 
-        last_sent_id = -1 
-
+        last_sent_id = -1
         try:
             while self._is_running:
-                # Check if we have a new frame compared to last time
-                if self.stream_state and self.stream_state.frame_bytes and self.stream_state.frame_id > last_sent_id:
-                    frame_data = self.stream_state.frame_bytes
-                    last_sent_id = self.stream_state.frame_id
+                # Get the frame specific to this ID
+                frame_data = self.stream_state.frame_bytes.get(video_id)
+                current_id = self.stream_state.frame_ids.get(video_id, -1)
 
+                if frame_data and current_id > last_sent_id:
+                    last_sent_id = current_id
                     await response.write(
-                        f'--{boundary}\r\n'.encode() +
-                        b'Content-Type: image/jpeg\r\n' +
+                        f'--{boundary}\r\nContent-Type: image/jpeg\r\n'
                         f'Content-Length: {len(frame_data)}\r\n\r\n'.encode() +
-                        frame_data + 
-                        b'\r\n'
+                        frame_data + b'\r\n'
                     )
-                    # aggressive wait: we can check frequently because check is cheap
                     await asyncio.sleep(0.001)
                 else:
                     # No new frame yet, sleep a bit to yield control
                     await asyncio.sleep(0.005)
-                    
         except (ConnectionResetError, web.HTTPException):
             # Normal client disconnection
             print("[WEB] Client disconnected from video feed.")
@@ -80,6 +78,7 @@ class WebInterface:
         except Exception as e:
             # 4. Catch the crash! This usually reveals the 'NameError' or logic bug.
             print(f"[ERROR] Video Feed Crashed: {e}")
+            raise
         return response
 
 

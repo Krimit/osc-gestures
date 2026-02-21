@@ -74,20 +74,51 @@ camera_setup = CameraSetup()
 W, H = 1280, 720
 SEND_TO_TD = True
 
+
+
 class StreamState:
-    """Thread-safe container for the latest visual state."""
     def __init__(self):
-        self.frame_bytes = None
-        self.frame_id = 0
+        # Data
+        self.frames = {}       # { "Camera_0_HANDS": ndarray, ... }
+        self.frame_bytes = {}  # { "0": jpeg_bytes, "1": jpeg_bytes } for web
+        self.frame_ids = {}    
+        # Logic State
         self.event_number = -1
         self.current_gesture = None
         self.next_gesture = None
+        # Stats
+        self.mps_osc = 0
+        self.fps_gpu = 0
+
 
 # Web page for performer tracking.
 stream_state = StreamState() # Initialize globally
 # use port 80, which allows client to skip setting the port entirely!
 web = WebInterface(port=80, stream_state=stream_state) # otherwise use port=8191
 
+
+class LaptopDebugger:
+    """The 'Local View' - Responsible for the laptop's OpenCV window."""
+    def __init__(self, window_name="Hollow Man Debug View"):
+        self.window_name = window_name
+        cv2.namedWindow(self.window_name)
+
+    def update(self, frames_dict, stats):
+        frames_to_stack = []
+        for name in sorted(frames_dict.keys()):
+            frame = frames_dict[name]
+            if frame is not None:
+                frames_to_stack.append(resize_frame(frame))
+
+        if frames_to_stack:
+            combined = np.vstack(frames_to_stack)
+            # Use your existing draw_hud logic here
+            final_image = draw_hud(combined, stats)
+            cv2.imshow(self.window_name, final_image)
+            return cv2.waitKey(1) & 0xFF != ord('q')
+        return True
+
+local_view = LaptopDebugger()
 
 class NetworkStats:
     def __init__(self, log_interval=1.0):
@@ -599,52 +630,85 @@ def resize_frame(frame):
     return cv2.resize(frame, (target_w, int(h * target_w / w)))
 
 #@timeit_async
-async def gui_manager_iteration(latest_detections, window_name):
-    frames_to_stack = []
+async def gui_manager_iteration(latest_detections):
+    # 1. Update Model Stats for the HUD
+    net_stats.check_tick()
+    stream_state.mps_osc = net_stats.display_rate
+    stream_state.fps_gpu = net_stats.metal_rate
+
+    # 2. Update Model Frames
+    current_frames = {}
+    # Sorting ensures consistent stacking order on the laptop
+    sorted_keys = sorted(latest_detections.keys())
     
-    # Pull frames from the shared dictionary
-    # Sorting by key ensures the order (top to bottom) stays consistent
-    for name in sorted(latest_detections.keys()):
+    for i, name in enumerate(sorted_keys):
         detection = latest_detections[name]
-        if detection is None:
-            continue
-        frame = detection.annotated_frame
-        if frame is not None:
-            frame = resize_frame(frame)
-            frames_to_stack.append(frame)
+        if detection and detection.annotated_frame is not None:
+            raw_frame = detection.annotated_frame
+            
+            # Store raw frames for the LaptopDebugger (Local View)
+            current_frames[name] = raw_frame
+            
+            # Prepare JPEGs for the WebInterface (iPad View)
+            loop = asyncio.get_running_loop()
+            jpeg = await loop.run_in_executor(executor, encode_frame_task, raw_frame)
+            if jpeg:
+                stream_state.frame_bytes[str(i)] = jpeg
+                stream_state.frame_ids[str(i)] = stream_state.frame_ids.get(str(i), 0) + 1
 
-        if INCLUDE_ORIGINAL_FRAME_IN_GUI:
-            if detection.original_frame is not None:
-                original_frame = resize_frame(detection.original_frame)
-                frames_to_stack.append(original_frame)
+    # 3. Trigger the Local View (Laptop Debugger)
+    # This draws the vertical stack + HUD on your laptop screen
+    active = local_view.update(current_frames, net_stats)
+    return active
 
-    if frames_to_stack:
-        # Stack all frames vertically
-        # Note: All frames must have the same width and channel count
-        combined_view = np.vstack(frames_to_stack)
-        final_image = draw_hud(combined_view, net_stats)
-        cv2.imshow(window_name, final_image)
 
-        # Publish to web for iPad
-        loop = asyncio.get_running_loop()
-        future = loop.run_in_executor(executor, encode_frame_task, final_image)
+
+# async def gui_manager_iteration(latest_detections, window_name):
+#     frames_to_stack = []
+    
+#     # Pull frames from the shared dictionary
+#     # Sorting by key ensures the order (top to bottom) stays consistent
+#     for name in sorted(latest_detections.keys()):
+#         detection = latest_detections[name]
+#         if detection is None:
+#             continue
+#         frame = detection.annotated_frame
+#         if frame is not None:
+#             frame = resize_frame(frame)
+#             frames_to_stack.append(frame)
+
+#         if INCLUDE_ORIGINAL_FRAME_IN_GUI:
+#             if detection.original_frame is not None:
+#                 original_frame = resize_frame(detection.original_frame)
+#                 frames_to_stack.append(original_frame)
+
+#     if frames_to_stack:
+#         # Stack all frames vertically
+#         # Note: All frames must have the same width and channel count
+#         combined_view = np.vstack(frames_to_stack)
+#         final_image = draw_hud(combined_view, net_stats)
+#         cv2.imshow(window_name, final_image)
+
+#         # Publish to web for iPad
+#         loop = asyncio.get_running_loop()
+#         future = loop.run_in_executor(executor, encode_frame_task, final_image)
         
-        # Callback to update the state when compression is done
-        def update_stream_state(task):
-            try:
-                result = task.result()
-                if result:
-                    stream_state.frame_bytes = result
-                    stream_state.frame_id += 1 # Increment ID
-            except Exception:
-                pass
+#         # Callback to update the state when compression is done
+#         def update_stream_state(task):
+#             try:
+#                 result = task.result()
+#                 if result:
+#                     stream_state.frame_bytes = result
+#                     stream_state.frame_id += 1 # Increment ID
+#             except Exception:
+#                 pass
 
-        future.add_done_callback(update_stream_state)
+#         future.add_done_callback(update_stream_state)
 
-    # Need to wait, otherwise drawing doesn't get a chance to happen
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        return False
-    return True    
+#     # Need to wait, otherwise drawing doesn't get a chance to happen
+#     if cv2.waitKey(1) & 0xFF == ord('q'):
+#         return False
+#     return True    
         
 
 async def gui_manager():
@@ -654,7 +718,7 @@ async def gui_manager():
 
     while True:
         start_time = asyncio.get_event_loop().time()
-        active = await gui_manager_iteration(latest_detections, window_name)
+        active = await gui_manager_iteration(latest_detections)
         if not active:
             break
 
@@ -812,7 +876,7 @@ async def main(test_mode=False):
     #model_mapping = ["Camera_0", "FACE"]
     #model_mapping = ["Camera_0", "HANDS"]
     #model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
-    model_mapping = ["Camera_1", "FACE", "Camera_1", "HANDS_AND_FACE"]
+    model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS_AND_FACE"]
     #model_mapping = ["Camera_1", "HANDS_AND_FACE"]
 
 
