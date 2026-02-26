@@ -53,7 +53,6 @@ class ModelKey(NamedTuple):
 
 model_controllers: dict[ModelKey, ModelController] = {}
 running_tasks: dict[ModelKey, asyncio.Task] = {}
-camera_assignments: dict[str, Detector] = {}
 
 _active_tasks = set()
 
@@ -252,7 +251,6 @@ def handle_cameras(address: str, *args: List[Any]) -> None:
 
 def setup_selected_models(keys_to_spawn: list, camera_name_to_camera: dict) -> None:
     global model_controllers
-    global camera_assignments
     # Clear the specific category if needed, or just update
     print(f"setup_selected_models pairs {keys_to_spawn} {camera_name_to_camera}")
     
@@ -306,7 +304,6 @@ def handle_models(address: str, *args: List[Any]) -> None:
 
     global detectors_to_enabled
     global latest_detections
-    global camera_assignments
     global model_controllers
     global running_tasks
     global syphon_bridges
@@ -318,8 +315,6 @@ def handle_models(address: str, *args: List[Any]) -> None:
 
         if latest_detections:
             latest_detections.clear()
-        if camera_assignments:
-            camera_assignments.clear()
         for task in running_tasks.values():
             task.cancel()
         running_tasks.clear()
@@ -328,7 +323,9 @@ def handle_models(address: str, *args: List[Any]) -> None:
         model_controllers.clear()
         for bridge in syphon_bridges.values():
             bridge.close()
-        syphon_bridges.clear()  
+        syphon_bridges.clear()
+
+        stream_state = StreamState() # reset
         
         print("Selecting models to use and pairing with cameras.")
         
@@ -350,7 +347,6 @@ def handle_models(address: str, *args: List[Any]) -> None:
             active_cameras.add(camera_name)
             detector_type = Detector[args[i+1]]
             
-            camera_assignments[camera_name] = detector_type
             assigned_modes_present.add(detector_type)
 
             # Determine which physical controllers (ModelKeys) to create
@@ -420,7 +416,13 @@ def handle_feedback(address: str, *args: List[Any]) -> None:
         print(f"Got an event change: {args}")
         stream_state.event_number = args[0]
         stream_state.current_gesture = args[1]
-        stream_state.next_gesture = args[2]
+
+        # Join arbitrary number of arguments for the long instruction
+        # This handles: "lh", "duck", "and", "rh", "open" -> "lh duck and rh open"
+        instruction_text = " ".join(map(str, args[2:]))
+
+        # Safety net: replace underscores if you're still transitioning Max data
+        stream_state.next_gesture = instruction_text.replace("_", " ")
     else:
         print("unrecognized command: " + command)
 
@@ -504,30 +506,26 @@ async def model_supervisor():
 
 def is_detector_active(key: ModelKey):
     """
-    Determines if a worker should run based on its camera's assigned Master Mode.
+    Determines if a worker should run based purely on its own detector toggle.
+    No master assignments or special treatment.
     """
     camera_name = key.camera_name
     detector_type = key.detector
 
-    # Runs if Segment is manually ON, OR if the Main Assigned Model for this camera is ON.
+    # Piggyback Logic for TouchDesigner Video (Segment)
     if detector_type == Detector.SEGMENT:
+        # Run if manually turned on
         if detectors_to_enabled.get(Detector.SEGMENT, False):
             return True
-        
-        # Check if the "Master" assignment for this camera is currently enabled
-        assigned_master = camera_assignments.get(camera_name)
-        if assigned_master and detectors_to_enabled.get(assigned_master, False):
-            return True
+
+        # Run if ANY other model on this exact camera is currently enabled
+        for controller_key in model_controllers.keys():
+            if controller_key.camera_name == camera_name and controller_key.detector != Detector.SEGMENT:
+                if detectors_to_enabled.get(controller_key.detector, False):
+                    return True
         return False
 
-    # We retrieve what this camera was assigned to (HANDS, FACE, or HANDS_AND_FACE)
-    assigned_master = camera_assignments.get(camera_name)
-    
-    if not assigned_master:
-        return False
-
-    # The worker runs ONLY if the global toggle for its *Assigned Master Mode* is True.
-    return detectors_to_enabled.get(assigned_master, False)
+    return detectors_to_enabled.get(detector_type, False)
           
 
 async def model_worker(controller):
@@ -563,7 +561,14 @@ async def model_worker(controller):
                     net_stats.record_no_send()
             await asyncio.sleep(0.001)
     except asyncio.CancelledError:
+        pass # Task was intentionally killed
+    finally:
+        # 1. Close hardware connections
         controller.close()
+        # 2. Scrub the ghost frame from the dictionary!
+        if controller.name in latest_detections:
+            latest_detections.pop(controller.name, None)
+
 
 async def camera_selection():
     while True:
@@ -639,7 +644,8 @@ async def gui_manager_iteration(latest_detections):
     # 2. Update Model Frames
     current_frames = {}
     # Sorting ensures consistent stacking order on the laptop
-    sorted_keys = sorted(latest_detections.keys())
+    active_keys = [k for k in latest_detections.keys() if latest_detections[k] is not None]
+    sorted_keys = sorted(active_keys)
     
     for i, name in enumerate(sorted_keys):
         detection = latest_detections[name]
@@ -659,57 +665,7 @@ async def gui_manager_iteration(latest_detections):
     # 3. Trigger the Local View (Laptop Debugger)
     # This draws the vertical stack + HUD on your laptop screen
     active = local_view.update(current_frames, net_stats)
-    return active
-
-
-
-# async def gui_manager_iteration(latest_detections, window_name):
-#     frames_to_stack = []
-    
-#     # Pull frames from the shared dictionary
-#     # Sorting by key ensures the order (top to bottom) stays consistent
-#     for name in sorted(latest_detections.keys()):
-#         detection = latest_detections[name]
-#         if detection is None:
-#             continue
-#         frame = detection.annotated_frame
-#         if frame is not None:
-#             frame = resize_frame(frame)
-#             frames_to_stack.append(frame)
-
-#         if INCLUDE_ORIGINAL_FRAME_IN_GUI:
-#             if detection.original_frame is not None:
-#                 original_frame = resize_frame(detection.original_frame)
-#                 frames_to_stack.append(original_frame)
-
-#     if frames_to_stack:
-#         # Stack all frames vertically
-#         # Note: All frames must have the same width and channel count
-#         combined_view = np.vstack(frames_to_stack)
-#         final_image = draw_hud(combined_view, net_stats)
-#         cv2.imshow(window_name, final_image)
-
-#         # Publish to web for iPad
-#         loop = asyncio.get_running_loop()
-#         future = loop.run_in_executor(executor, encode_frame_task, final_image)
-        
-#         # Callback to update the state when compression is done
-#         def update_stream_state(task):
-#             try:
-#                 result = task.result()
-#                 if result:
-#                     stream_state.frame_bytes = result
-#                     stream_state.frame_id += 1 # Increment ID
-#             except Exception:
-#                 pass
-
-#         future.add_done_callback(update_stream_state)
-
-#     # Need to wait, otherwise drawing doesn't get a chance to happen
-#     if cv2.waitKey(1) & 0xFF == ord('q'):
-#         return False
-#     return True    
-        
+    return active        
 
 async def gui_manager():
     global latest_detections

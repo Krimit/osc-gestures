@@ -60,7 +60,7 @@ class WebInterface:
                 frame_data = self.stream_state.frame_bytes.get(video_id)
                 current_id = self.stream_state.frame_ids.get(video_id, -1)
 
-                if frame_data and current_id > last_sent_id:
+                if frame_data and current_id != last_sent_id:
                     last_sent_id = current_id
                     await response.write(
                         f'--{boundary}\r\nContent-Type: image/jpeg\r\n'
@@ -70,7 +70,8 @@ class WebInterface:
                     await asyncio.sleep(0.001)
                 else:
                     # No new frame yet, sleep a bit to yield control
-                    await asyncio.sleep(0.005)
+                    #print(f"[WEB DEBUG] Stream {video_id} is starving/idle. current_id: {current_id}")
+                    await asyncio.sleep(0.015)
         except (ConnectionResetError, web.HTTPException):
             # Normal client disconnection
             print("[WEB] Client disconnected from video feed.")
