@@ -646,6 +646,8 @@ async def gui_manager_iteration(latest_detections):
     # Sorting ensures consistent stacking order on the laptop
     active_keys = [k for k in latest_detections.keys() if latest_detections[k] is not None]
     sorted_keys = sorted(active_keys)
+
+    new_frame_bytes = {}
     
     for i, name in enumerate(sorted_keys):
         detection = latest_detections[name]
@@ -659,13 +661,46 @@ async def gui_manager_iteration(latest_detections):
             loop = asyncio.get_running_loop()
             jpeg = await loop.run_in_executor(executor, encode_frame_task, raw_frame)
             if jpeg:
-                stream_state.frame_bytes[str(i)] = jpeg
+                new_frame_bytes[str(i)] = jpeg
                 stream_state.frame_ids[str(i)] = stream_state.frame_ids.get(str(i), 0) + 1
+
+    stream_state.frame_bytes = new_frame_bytes
 
     # 3. Trigger the Local View (Laptop Debugger)
     # This draws the vertical stack + HUD on your laptop screen
     active = local_view.update(current_frames, net_stats)
     return active        
+
+
+
+
+
+
+
+
+
+    current_frames = {}
+    active_keys = [k for k in latest_detections.keys() if latest_detections[k] is not None]
+    sorted_keys = sorted(active_keys)
+    
+    # ADD THIS: Prepare a fresh dictionary so dead streams are dropped
+
+    for i, name in enumerate(sorted_keys):
+        detection = latest_detections[name]
+        if detection and detection.annotated_frame is not None:
+            raw_frame = detection.annotated_frame
+            current_frames[name] = raw_frame
+            
+            loop = asyncio.get_running_loop()
+            jpeg = await loop.run_in_executor(executor, encode_frame_task, raw_frame)
+            if jpeg:
+                new_frame_bytes[str(i)] = jpeg
+                stream_state.frame_ids[str(i)] = stream_state.frame_ids.get(str(i), 0) + 1
+    
+    # Commit the fresh dictionary to state
+
+
+
 
 async def gui_manager():
     global latest_detections
@@ -830,9 +865,9 @@ async def main(test_mode=False):
 
     # Adjust this as needed when testing
     #model_mapping = ["Camera_0", "FACE"]
-    #model_mapping = ["Camera_0", "HANDS"]
+    model_mapping = ["Camera_0", "HANDS"]
     #model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
-    model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS_AND_FACE"]
+    #model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS_AND_FACE"]
     #model_mapping = ["Camera_1", "HANDS_AND_FACE"]
 
 
