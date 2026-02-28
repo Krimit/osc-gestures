@@ -74,8 +74,9 @@ class WebInterface:
                     await asyncio.sleep(0.001)
                 else:
                     # No new frame yet, sleep a bit to yield control
-                    print(f"[WEB DEBUG] Stream {video_id} is starving/idle. current_id: {current_id}")
-                    await asyncio.sleep(0.005)
+                    # Can be completely normal, only log if debugging something.
+                    #print(f"[WEB DEBUG] Stream {video_id} is starving/idle. current_id: {current_id}")
+                    await asyncio.sleep(0.01)
         except (ConnectionResetError, web.HTTPException):
             # Normal client disconnection
             print("[WEB] Client disconnected from video feed.")
