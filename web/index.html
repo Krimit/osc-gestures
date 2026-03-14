@@ -57,7 +57,6 @@
 
             // 2. Create new cells for active streams not yet rendered
             activeIds.forEach(id => {
-                // If this specific video ID isn't on the page yet, build it
                 if (!document.querySelector(`.video-cell[data-id="${id}"]`)) {
                     const cell = document.createElement('div');
                     cell.className = 'video-cell';
@@ -65,18 +64,34 @@
 
                     const img = document.createElement('img');
                     img.className = 'stream-img';
-                    // Append a timestamp to the initial load to bust cache and force connection
-                    img.src = `/video/${id}?t=${new Date().getTime()}`;
                     
-                    // Fallback safeguards
-                    img.onerror = () => cell.style.display = 'none';
-                    img.onload = () => cell.style.display = 'flex';
+                    // PULL LOGIC: Fetch next frame on success
+                    img.onload = () => {
+                        // STOP if the cell was removed from the screen (fixes the memory leak)
+                        if (!img.isConnected) return; 
+                        
+                        // Pace the requests to ~30fps to avoid flooding your local router
+                        setTimeout(() => {
+                            img.src = `/video/${id}?t=${Date.now()}`;
+                        }, 33); 
+                    };
 
+                    // RECOVERY LOGIC: Try again if the network drops (fixes the silent death)
+                    img.onerror = () => {
+                        if (!img.isConnected) return;
+                        console.warn(`Connection to stream ${id} dropped. Retrying...`);
+                        setTimeout(() => {
+                            img.src = `/video/${id}?t=${Date.now()}`;
+                        }, 500);
+                    };
+
+                    // Kick off the first request
+                    img.src = `/video/${id}?t=${Date.now()}`;
+                    
                     cell.appendChild(img);
                     container.appendChild(cell);
                 }
             });
-
         } catch(e) {
             // Silently catch network drops
         }
