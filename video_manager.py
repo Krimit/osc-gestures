@@ -12,7 +12,7 @@ class VideoManager:
         self.width = width
         self.height = height
         self.target_fps = target_fps
-        self.camera_direction = CameraDirection.NORMAL
+        self.camera_direction = CameraDirection.FLIP_SIDE
         
         self.video = None
         self.latest_frame = None
