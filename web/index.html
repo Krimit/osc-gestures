@@ -44,8 +44,9 @@
 
             // DYNAMIC LAYOUT SNAP
             const container = document.getElementById('video-container');
+
             // Safely grab the array sent by the Python backend (e.g., ["0", "1"])
-            const activeIds = d.active_videos || []; 
+            const activeIds = (d.active_videos || []).map(String); 
 
             // 1. Remove cells from the screen if the server says they are no longer active
             Array.from(container.children).forEach(cell => {
@@ -79,10 +80,11 @@
         } catch(e) {
             // Silently catch network drops
         }
+        setTimeout(update, 100);
     }
     
-    // Start the loop
-    setInterval(update, 100);
+    // Start the loop, which is managed internally by the update method
+    update()
 </script>
 </body>
 </html>
