@@ -12,7 +12,7 @@ from model_target import ModelTarget
 
 
 MARGIN = 10  # pixels
-FONT_SIZE = 1
+FONT_SIZE = 3
 FONT_THICKNESS = 1
 HANDEDNESS_TEXT_COLOR = (23, 26, 25) #(88, 205, 54) # vibrant green
 
