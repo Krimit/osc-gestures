@@ -35,6 +35,7 @@ class Detector(Enum):
 @dataclass(frozen=True)  # Make instances immutable
 class DetectedFrame:
     name : str
+    camera_name: str
     original_frame: np.ndarray
     annotated_frame: np.ndarray
     detection_dict: dict
@@ -176,7 +177,7 @@ class ModelController():
             annotated_image, results_dict = await self._get_annotated_frame(self.hands_module, self.hands_module.frame, self.hands_module.consume_result())
             self.in_progress = False
             self.num_loops_waiting_for_results = 0
-            detection = DetectedFrame(self.name, None, annotated_image, results_dict, self.enabled_detector)
+            detection = DetectedFrame(self.name, self.key.camera_name, None, annotated_image, results_dict, self.enabled_detector)
             return detection
         else:
             #print("waiting for a result. Hands={}, segment={}".format(self.hands_module.result_is_ready(), self.segment_can_continue()))
@@ -199,7 +200,7 @@ class ModelController():
             annotated_image, results_dict = await self._get_annotated_frame(self.face_module, self.face_module.frame, self.face_module.consume_result())
             self.in_progress = False
             self.num_loops_waiting_for_results = 0
-            detection = DetectedFrame(self.name, None, annotated_image, results_dict, self.enabled_detector)
+            detection = DetectedFrame(self.name, self.key.camera_name, None, annotated_image, results_dict, self.enabled_detector)
             return detection
         else:
             self.num_loops_waiting_for_results += 1
@@ -238,7 +239,7 @@ class ModelController():
 
             self.in_progress = False
             self.num_loops_waiting_for_results = 0
-            return DetectedFrame(self.name, None, final_frame, combined_dict, self.enabled_detector)
+            return DetectedFrame(self.name, self.key.camera_name, None, final_frame, combined_dict, self.enabled_detector)
         else:
             # If either one is not ready, we wait.
             self.num_loops_waiting_for_results += 1
@@ -262,7 +263,7 @@ class ModelController():
             visual_frame = await self.get_frame_for_visualizing(self.segment_module.frame)                
             self.in_progress = False
             self.num_loops_waiting_for_results = 0
-            detection = DetectedFrame(self.name, visual_frame, None, None, self.enabled_detector)
+            detection = DetectedFrame(self.name, self.key.camera_name, visual_frame, None, None, self.enabled_detector)
             return detection
         else:
             self.num_loops_waiting_for_results += 1
