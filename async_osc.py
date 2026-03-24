@@ -695,6 +695,23 @@ def publish_to_metal(bridge, frame):
     with objc.autorelease_pool():        
         bridge.publish_to_metal(frame)
 
+def get_semantic_camera_name(camera_name: str) -> str:
+    """
+    Checks the global model registry to see what models are running on this camera hardware.
+    """
+    # Find all detectors assigned to this specific camera hardware
+    detectors_on_cam = [
+        key.detector for key in model_controllers.keys() 
+        if key.camera_name == camera_name
+    ]
+    
+    # If a face model is mapped to this hardware, it is the Face camera
+    if Detector.FACE in detectors_on_cam or Detector.HANDS_AND_FACE in detectors_on_cam:
+        return "Front"
+        
+    return "Table"
+
+
 #@timeit_async
 async def syphon_manager_iteration(loop, latest_detections, syphon_bridges):
     segment_detections = [
@@ -713,8 +730,8 @@ async def syphon_manager_iteration(loop, latest_detections, syphon_bridges):
             continue
 
         if detection.name not in syphon_bridges:
-            # Initialize bridge with specific camera dimensions if needed
-            output_name = "HollowManVideo_" + detection.name
+            semantic_name = get_semantic_camera_name(detection.camera_name)
+            output_name = "HollowManVideo_" + semantic_name
             syphon_bridges[detection.name] = MetalVideoBridge(W, H, output_name)
             print("Created new MetalVideoBridge, sending video to metal as: {}".format(output_name))
 
@@ -842,8 +859,8 @@ async def main(test_mode=False):
     # Adjust this as needed when testing
     #model_mapping = ["Camera_0", "FACE"]
     #model_mapping = ["Camera_1", "HANDS"]
-    model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
-    #model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS_AND_FACE"]
+    #model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
+    model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS_AND_FACE", "Camera_0", "HANDS"]
     #model_mapping = ["Camera_1", "HANDS_AND_FACE"]
 
 
