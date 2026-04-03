@@ -696,14 +696,6 @@ def publish_to_metal(bridge, frame):
         bridge.publish_to_metal(frame)
 
 
-def get_semantic_camera_name(detector_type: Detector) -> str:
-    """
-    Maps a specific detector type to a Syphon output name.
-    """
-    if detector_type == Detector.HANDS:
-        return "Table"
-    return "Front" 
-
 #@timeit_async
 async def syphon_manager_iteration(loop, latest_detections, syphon_bridges):
     segment_detections = [
@@ -721,14 +713,27 @@ async def syphon_manager_iteration(loop, latest_detections, syphon_bridges):
         if frame is None:
             continue
 
-        semantic_name = get_semantic_camera_name(detection.camera_name)
+        # Determine Syphon stream names by checking what else this camera is assigned to do
+        stream_names = set()
+        for key in model_controllers.keys():
+            if key.camera_name == detection.camera_name:
+                if key.detector == Detector.HANDS:
+                    stream_names.add("Table")
+                elif key.detector in (Detector.FACE, Detector.HANDS_AND_FACE):
+                    stream_names.add("Front")
+        
+        # Fallback just in case no other models are assigned
+        if not stream_names:
+            stream_names.add("Front")
 
-        if semantic_name not in syphon_bridges:
-            output_name = "HollowManVideo_" + semantic_name
-            syphon_bridges[semantic_name] = MetalVideoBridge(W, H, output_name)
-            print("Created new MetalVideoBridge, sending video to metal as: {}".format(output_name))
+        # Publish the single frame to all required Syphon outputs for this camera
+        for semantic_name in stream_names:
+            if semantic_name not in syphon_bridges:
+                output_name = "HollowManVideo_" + semantic_name
+                syphon_bridges[semantic_name] = MetalVideoBridge(W, H, output_name)
+                print("Created new MetalVideoBridge, sending video to metal as: {}".format(output_name))
 
-        await loop.run_in_executor(executor, publish_to_metal, syphon_bridges[semantic_name], frame)
+            await loop.run_in_executor(executor, publish_to_metal, syphon_bridges[semantic_name], frame)
 
 
 async def syphon_manager():
