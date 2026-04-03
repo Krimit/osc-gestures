@@ -695,22 +695,14 @@ def publish_to_metal(bridge, frame):
     with objc.autorelease_pool():        
         bridge.publish_to_metal(frame)
 
-def get_semantic_camera_name(camera_name: str) -> str:
-    """
-    Checks the global model registry to see what models are running on this camera hardware.
-    """
-    # Find all detectors assigned to this specific camera hardware
-    detectors_on_cam = [
-        key.detector for key in model_controllers.keys() 
-        if key.camera_name == camera_name
-    ]
-    
-    # If a face model is mapped to this hardware, it is the Face camera
-    if Detector.FACE in detectors_on_cam or Detector.HANDS_AND_FACE in detectors_on_cam:
-        return "Front"
-        
-    return "Table"
 
+def get_semantic_camera_name(detector_type: Detector) -> str:
+    """
+    Maps a specific detector type to a Syphon output name.
+    """
+    if detector_type == Detector.HANDS:
+        return "Table"
+    return "Front" 
 
 #@timeit_async
 async def syphon_manager_iteration(loop, latest_detections, syphon_bridges):
@@ -729,13 +721,14 @@ async def syphon_manager_iteration(loop, latest_detections, syphon_bridges):
         if frame is None:
             continue
 
-        if detection.name not in syphon_bridges:
-            semantic_name = get_semantic_camera_name(detection.camera_name)
+        semantic_name = get_semantic_camera_name(detection.camera_name)
+
+        if semantic_name not in syphon_bridges:
             output_name = "HollowManVideo_" + semantic_name
-            syphon_bridges[detection.name] = MetalVideoBridge(W, H, output_name)
+            syphon_bridges[semantic_name] = MetalVideoBridge(W, H, output_name)
             print("Created new MetalVideoBridge, sending video to metal as: {}".format(output_name))
 
-        await loop.run_in_executor(executor, publish_to_metal, syphon_bridges[detection.name], frame)
+        await loop.run_in_executor(executor, publish_to_metal, syphon_bridges[semantic_name], frame)
 
 
 async def syphon_manager():
@@ -810,7 +803,7 @@ async def cleanup():
     if running_tasks:
         await asyncio.gather(*running_tasks.values(), return_exceptions=True)
 
-    # 3. Close Model Controllers
+    # Close Model Controllers
     print(f"Closing {len(model_controllers)} model controllers...")
     for (cam_name, detector, model_target), controller in model_controllers.items():
         try:
@@ -823,7 +816,11 @@ async def cleanup():
     print("Closing cameras...")
     camera_setup.close()
 
-    # 2. Close Metal Bridges (Crucial: Stop Syphon before Metal device is killed)
+    # Shutdown the ThreadPoolExecutor
+    print("Shutting down executor...")
+    executor.shutdown(wait=True, cancel_futures=True)
+
+    # Close Metal Bridges (Crucial: Stop Syphon before Metal device is killed)
     print(f"Closing {len(syphon_bridges)} Syphon bridges...")
     for name, bridge in syphon_bridges.items():
         try:
@@ -834,12 +831,8 @@ async def cleanup():
 
     print("Stopping Web Interface...")
     await web.stop()    
-
-    # 4. Shutdown the ThreadPoolExecutor
-    print("Shutting down executor...")
-    executor.shutdown(wait=True, cancel_futures=True)
     
-    # 5. Destroy OpenCV Windows
+    # Destroy OpenCV Windows
     cv2.destroyAllWindows()
     print("--- Shutdown Complete ---")
 
@@ -861,6 +854,7 @@ async def main(test_mode=False):
     #model_mapping = ["Camera_1", "HANDS"]
     #model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
     model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS_AND_FACE", "Camera_0", "HANDS"]
+    #model_mapping = ["Camera_1", "FACE", "Camera_1", "HANDS_AND_FACE", "Camera_1", "HANDS"]
     #model_mapping = ["Camera_1", "HANDS_AND_FACE"]
 
 
