@@ -118,6 +118,9 @@ class ModelController():
     def __str__(self):
         return "video_manager: {}, enabled_detector: {}".format(self.video_manager, self.enabled_detector) 
 
+    def _update_timestamp(self):
+        self.timestamp = max(self.timestamp + 1, int(time.time() * 1000))
+
     #@timeit_async
     async def _get_frame(self):
         """Offloads the blocking OpenCV read to a thread"""
@@ -167,7 +170,7 @@ class ModelController():
                 
         if not self.in_progress:
             self.original_frame = await self._get_frame()
-            self.timestamp = int(time.time() * 1000)
+            self._update_timestamp()
             self._submit_inference(self.hands_module, self.original_frame, self.timestamp)
             self.in_progress = True
         if self.hands_module.result_is_ready():
@@ -191,7 +194,7 @@ class ModelController():
                 
         if not self.in_progress:
             self.original_frame = await self._get_frame()
-            self.timestamp = int(time.time() * 1000)
+            self._update_timestamp()
             self._submit_inference(self.face_module, self.original_frame, self.timestamp)
             self.in_progress = True
         if self.face_module.result_is_ready():
@@ -215,7 +218,7 @@ class ModelController():
         # 1. Fire both tasks
         if not self.in_progress:
             self.original_frame = await self._get_frame()
-            self.timestamp = int(time.time() * 1000)
+            self._update_timestamp()
             
             self._submit_inference(self.hands_module, self.original_frame, self.timestamp)
             self._submit_inference(self.face_module, self.original_frame, self.timestamp)
@@ -253,7 +256,7 @@ class ModelController():
                 
         if not self.in_progress:
             self.original_frame = await self._get_frame()
-            self.timestamp = int(time.time() * 1000)
+            self._update_timestamp()
             small_frame = self.original_frame #small_frame = cv2.resize(self.original_frame, RESIZE_DIM, interpolation=cv2.INTER_AREA)
             self.segment_module.recognize_frame_async(True, small_frame, self.timestamp) 
             self.in_progress = True
