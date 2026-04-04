@@ -553,6 +553,9 @@ async def model_worker(controller):
                 if osc_messages:
                     for key, message in osc_messages.items():
                         if message is not None:
+                            if "bbox" in key:
+                                # TODO: Placeholder: Stream bounding box to TouchDesigner
+                                pass
                             path = "/detect/" + key
                             #print("sending osc message to {}".format(path))
                             send_client.send_message(path, message)
@@ -858,8 +861,8 @@ async def main(test_mode=False):
     #model_mapping = ["Camera_0", "FACE"]
     #model_mapping = ["Camera_1", "HANDS"]
     #model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
-    model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS_AND_FACE", "Camera_0", "HANDS"]
-    #model_mapping = ["Camera_1", "FACE", "Camera_1", "HANDS_AND_FACE", "Camera_1", "HANDS"]
+    #model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS_AND_FACE", "Camera_0", "HANDS"]
+    model_mapping = ["Camera_1", "FACE", "Camera_1", "HANDS_AND_FACE", "Camera_1", "HANDS"]
     #model_mapping = ["Camera_1", "HANDS_AND_FACE"]
 
 
