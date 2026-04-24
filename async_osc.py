@@ -21,6 +21,10 @@ import traceback
 import concurrent.futures
 from collections import defaultdict
 
+import json
+import os
+
+import time
 from method_timer import timeit_async
 
 from pythonosc.udp_client import SimpleUDPClient
@@ -40,8 +44,30 @@ executor = concurrent.futures.ThreadPoolExecutor(max_workers=16)
 
 ip = "127.0.0.1"
 recieve_port = 5061
-send_port = 5056
-send_client = SimpleUDPClient(ip, send_port)
+maxmsp_send_port = 5056 # MaxMSP
+maxmsp_send_client = SimpleUDPClient(ip, maxmsp_send_port)
+
+td_send_port = 5058 # TouchDesigner
+td_send_client = SimpleUDPClient(ip, td_send_port)
+
+# For TocuhDesigner event routing
+class TdRouteKey(NamedTuple):
+    semantic_camera_name: str
+    hand: str
+
+def load_gesture_map(filepath):
+    if not os.path.exists(filepath):
+        print(f"[WARNING] {filepath} not found. Routing disabled.")
+        return {}
+    with open(filepath, 'r') as f:
+        return json.load(f)
+
+SCENE_3_GESTURE_MAP = load_gesture_map("scene_3_gesture_map.json")
+gesture_heartbeats = {}
+
+# for scene 3, keep track of the active gestures. This maps from Python terms to the td_id.
+scene_3_active_routes: dict[TdRouteKey, int] = {}
+route_last_seen: dict[TdRouteKey, float] = {}
 
 class ModelKey(NamedTuple):
     camera_name: str
@@ -426,6 +452,49 @@ def handle_feedback(address: str, *args: List[Any]) -> None:
     else:
         print("unrecognized command: " + command)
 
+def handle_gesture_event(address: str, *args: List[Any]) -> None:
+    global scene_3_active_routes
+    if not args: return
+    gesture_name = args[0]
+    
+    if gesture_name not in SCENE_3_GESTURE_MAP:
+        return
+
+    mapping = SCENE_3_GESTURE_MAP[gesture_name]
+    td_id = mapping["td_id"]
+
+    route_key = TdRouteKey(
+        semantic_camera_name=mapping["semantic_camera_name"].lower(),
+        hand=mapping["hand"].lower()
+    )
+        
+    if address.endswith("/start"):
+        # If this hand was doing something else, explicitly kill the old slot in TD!
+        if route_key in scene_3_active_routes:
+            old_gesture = scene_3_active_routes[route_key]
+            if old_gesture != gesture_name:
+                td_send_client.send_message(f"/td/v2/event/{old_gesture}", ["end"])
+                
+        scene_3_active_routes[route_key] = gesture_name
+        
+    elif address.endswith("/end"):
+        if route_key in scene_3_active_routes:
+            # BLIND POP FIX: Only pop the route if the ending sound is the CURRENTly tracked gesture.
+            if scene_3_active_routes[route_key] == gesture_name:
+                stored_gesture = scene_3_active_routes.pop(route_key)
+                
+                v2_end_path = f"/td/v2/event/{stored_gesture}"
+                td_send_client.send_message(v2_end_path, ["end"])
+                
+                if stored_gesture in gesture_heartbeats:
+                    del gesture_heartbeats[stored_gesture]
+            else:
+                # Max finished fading an OLD sound. Do NOT pop the dictionary (a new gesture owns it now).
+                # Just pass the explicit 'end' to TD for cleanup.
+                td_send_client.send_message(f"/td/v2/event/{gesture_name}", ["end"])
+                if gesture_name in gesture_heartbeats:
+                    del gesture_heartbeats[gesture_name]
+
 
 dispatcher = Dispatcher()
 
@@ -441,6 +510,10 @@ dispatcher.map("/controller/models*", handle_models)
 
 # handle feedback during the performance to track instructions.
 dispatcher.map("/feedback/events*", handle_feedback)
+
+# handle gesture lifecycle for touch designer visualization
+dispatcher.map("/event/gesture/start", handle_gesture_event)
+dispatcher.map("/event/gesture/end", handle_gesture_event)
 
 def compute_60fps_sleep_time(start_time):
     target_fps = 60
@@ -528,6 +601,65 @@ def is_detector_active(key: ModelKey):
     return detectors_to_enabled.get(detector_type, False)
           
 
+def calculate_square_crop(x, y, w, h):
+    """
+    Converts a raw bounding box into a centered perfect square.
+    Returns the centroid (cx, cy) and the target size (longest edge).
+    """
+    cx = x + (w / 2.0)
+    cy = y + (h / 2.0)
+    size = max(w, h)
+    return cx, cy, size
+
+
+def route_bbox_to_td(key: str, message: list, detector: Detector):
+    """Helper to evaluate and route bounding boxes to TouchDesigner."""
+    semantic_cam = "table" if detector == Detector.HANDS else "front"
+    anatomy = key.split("/")[1] 
+    
+    route_key = TdRouteKey(semantic_camera_name=semantic_cam, hand=anatomy)
+
+    current_time = time.time()
+    last_seen = route_last_seen.get(route_key, current_time)
+    route_last_seen[route_key] = current_time
+    
+    if route_key in scene_3_active_routes:
+        # If hand was physically gone for >300ms, the dictionary gesture is stale.
+        # Wipe it and abort. We wait for MaxMSP to send a fresh /start.
+        if (current_time - last_seen) > 0.3:
+            scene_3_active_routes.pop(route_key)
+            return
+
+        gesture_name = scene_3_active_routes[route_key]
+        
+        # 1. Unpack raw bounding box
+        x, y, w, h = message[0], message[1], message[2], message[3]
+        
+        # 2. Convert to Steadicam format
+        cx, cy, size = calculate_square_crop(x, y, w, h)
+        
+        # ==========================================
+        # V2 STATE: The 1-Second Heartbeat (DAT)
+        # ==========================================
+        current_time = time.time()
+        last_beat = gesture_heartbeats.get(gesture_name, 0)
+        
+        # Send the trigger instantly on first appearance, then only once per 100ms.
+        # This completely stops the 60fps DAT hammering while keeping the TD Watchdog alive.
+        if (current_time - last_beat) > 0.1:
+            v2_event_path = f"/td/v2/event/{gesture_name}"
+            td_send_client.send_message(v2_event_path, ["trigger"])
+            gesture_heartbeats[gesture_name] = current_time
+
+        # ==========================================
+        # V2 STREAM: Continuous Data (CHOP)
+        # ==========================================
+        # Atomic payload, running at full 60fps
+        v2_stream_path = f"/td/v2/stream/{gesture_name}"
+        v2_stream_payload = [cx, cy, size]
+        td_send_client.send_message(v2_stream_path, v2_stream_payload)      
+
+
 async def model_worker(controller):
     """Isolated loop for a single model/camera pairing."""
     model_key = controller.key
@@ -554,12 +686,12 @@ async def model_worker(controller):
                     for key, message in osc_messages.items():
                         if message is not None:
                             if "bbox" in key:
-                                # TODO: Placeholder: Stream bounding box to TouchDesigner
-                                pass
-                            path = "/detect/" + key
-                            #print("sending osc message to {}".format(path))
-                            send_client.send_message(path, message)
-                            net_stats.record_send(path, message)
+                                route_bbox_to_td(key, message, controller.key.detector)
+                            else:
+                                path = "/detect/" + key
+                                #print("sending osc message to {}".format(path))
+                                maxmsp_send_client.send_message(path, message)
+                                net_stats.record_send(path, message)
                 else:
                     net_stats.record_no_send()
             await asyncio.sleep(0.001)
@@ -861,8 +993,8 @@ async def main(test_mode=False):
     #model_mapping = ["Camera_0", "FACE"]
     #model_mapping = ["Camera_1", "HANDS"]
     #model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
-    #model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS_AND_FACE", "Camera_0", "HANDS"]
-    model_mapping = ["Camera_1", "FACE", "Camera_1", "HANDS_AND_FACE", "Camera_1", "HANDS"]
+    model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS_AND_FACE", "Camera_0", "HANDS"]
+    #model_mapping = ["Camera_1", "FACE", "Camera_1", "HANDS_AND_FACE", "Camera_1", "HANDS"]
     #model_mapping = ["Camera_1", "HANDS_AND_FACE"]
 
 

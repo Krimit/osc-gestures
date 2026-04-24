@@ -1,0 +1,37 @@
+{
+  "flat_fist_down": {
+    "td_id": 1,
+    "semantic_camera_name": "Table",
+    "hand": "right"
+  },
+  "stop": {
+    "td_id": 2,
+    "semantic_camera_name": "Table",
+    "hand": "right"
+  },
+  "grab_side": {
+    "td_id": 3,
+    "semantic_camera_name": "Table",
+    "hand": "right"
+  },
+  "open_spread_up": {
+    "td_id": 4,
+    "semantic_camera_name": "Table",
+    "hand": "right"
+  },
+ "pointing_finger": {
+    "td_id": 5,
+    "semantic_camera_name": "Table",
+    "hand": "right"
+  },
+   "drum": {
+    "td_id": 6,
+    "semantic_camera_name": "Table",
+    "hand": "left"
+  },
+   "fist_to_open": {
+    "td_id": 7,
+    "semantic_camera_name": "Table",
+    "hand": "left"
+  }
+}
