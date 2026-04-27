@@ -16,6 +16,9 @@ FONT_SIZE = 3
 FONT_THICKNESS = 1
 HANDEDNESS_TEXT_COLOR = (23, 26, 25) #(88, 205, 54) # vibrant green
 
+# bounding box padding
+BBOX_PADDING = 0.15  # Configurable buffer: adds 15% padding around the hand
+
 BaseOptions = mp.tasks.BaseOptions
 VisionRunningMode = mp.tasks.vision.RunningMode
 
@@ -69,47 +72,81 @@ class Mediapipe_HandsModule():
             return round(data, precision)
         return data    
 
-    def draw_landmarks_on_image(self, rgb_image, gesture_result):
-      hand_landmarks_list = gesture_result.hand_landmarks
-      hand_world_landmark_list = gesture_result.hand_world_landmarks
-      handedness_list = gesture_result.handedness
-      gestures_list = gesture_result.gestures
-
-      annotated_image = np.copy(rgb_image)
-
-      # Loop through the detected hands to visualize.
-      for idx in range(len(hand_landmarks_list)):
-        hand_landmarks = hand_landmarks_list[idx]
-        world_landmarks = hand_world_landmark_list[idx]
-        handedness = handedness_list[idx]
-        gesture = gestures_list[idx]
-        hand_direction = OrientationCalculator.calc(world_landmarks)
-
-        # Draw the hand landmarks.
-        hand_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
-        hand_landmarks_proto.landmark.extend([
-          landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in hand_landmarks
-        ])
-        solutions.drawing_utils.draw_landmarks(
-          annotated_image,
-          hand_landmarks_proto,
-          solutions.hands.HAND_CONNECTIONS,
-          solutions.drawing_styles.get_default_hand_landmarks_style(),
-          solutions.drawing_styles.get_default_hand_connections_style())
-
-        # Get the top left corner of the detected hand's bounding box.
-        height, width, _ = annotated_image.shape
-        x_coordinates = [landmark.x for landmark in hand_landmarks]
-        y_coordinates = [landmark.y for landmark in hand_landmarks]
-        text_x = int(min(x_coordinates) * width)
-        text_y = int(min(y_coordinates) * height) - MARGIN
-
-        # Draw handedness (left or right hand) on the image.
-        cv2.putText(annotated_image, f"{handedness[0].category_name, gesture[0].category_name}",
-                    (text_x, text_y), cv2.FONT_HERSHEY_DUPLEX,
-                    FONT_SIZE, HANDEDNESS_TEXT_COLOR, FONT_THICKNESS, cv2.LINE_AA)
+    def _calculate_bounding_box(self, landmarks, frame_width, frame_height, padding_pct):
+        """Calculates a padded pixel bounding box from normalized landmarks."""
+        x_coords = [lm.x for lm in landmarks]
+        y_coords = [lm.y for lm in landmarks]
         
-      return annotated_image
+        x_min, x_max = min(x_coords), max(x_coords)
+        y_min, y_max = min(y_coords), max(y_coords)
+        
+        w = x_max - x_min
+        h = y_max - y_min
+        
+        pad_x = w * padding_pct
+        pad_y = h * padding_pct
+        
+        x_min = max(0.0, x_min - pad_x)
+        y_min = max(0.0, y_min - pad_y)
+        x_max = min(1.0, x_max + pad_x)
+        y_max = min(1.0, y_max + pad_y)
+        
+        return [
+            int(x_min * frame_width),
+            int(y_min * frame_height),
+            int((x_max - x_min) * frame_width),
+            int((y_max - y_min) * frame_height)
+        ]
+
+    def draw_landmarks_on_image(self, rgb_image, gesture_result):
+        hand_landmarks_list = gesture_result.hand_landmarks
+        hand_world_landmark_list = gesture_result.hand_world_landmarks
+        handedness_list = gesture_result.handedness
+        gestures_list = gesture_result.gestures
+
+        bboxes = getattr(gesture_result, 'custom_bboxes', {})
+
+        annotated_image = np.copy(rgb_image)
+
+        # Loop through the detected hands to visualize.
+        for idx in range(len(hand_landmarks_list)):
+            hand_landmarks = hand_landmarks_list[idx]
+            world_landmarks = hand_world_landmark_list[idx]
+            handedness = handedness_list[idx]
+            gesture = gestures_list[idx]
+            hand_direction = OrientationCalculator.calc(world_landmarks)
+
+            # Draw the hand landmarks.
+            hand_landmarks_proto = landmark_pb2.NormalizedLandmarkList()
+            hand_landmarks_proto.landmark.extend([
+              landmark_pb2.NormalizedLandmark(x=landmark.x, y=landmark.y, z=landmark.z) for landmark in hand_landmarks
+            ])
+            solutions.drawing_utils.draw_landmarks(
+              annotated_image,
+              hand_landmarks_proto,
+              solutions.hands.HAND_CONNECTIONS,
+              solutions.drawing_styles.get_default_hand_landmarks_style(),
+              solutions.drawing_styles.get_default_hand_connections_style())
+
+            # Utilize the pre-calculated bounding box for both the debug drawing AND text placement
+            hand_label = handedness[0].category_name.lower()
+            if f"hand/{hand_label}" in bboxes:
+                x, y, w, h = bboxes[f"hand/{hand_label}"]
+
+                # Draw the debug bounding box (Thin Cyan)
+                cv2.rectangle(annotated_image, (x, y), (x + w, y + h), (255, 255, 0), 1)
+
+                # Use the top-left corner of the bbox for text
+                text_x, text_y = x, max(0, y - MARGIN)
+            else:
+                text_x, text_y = 50, 50 # Fallback
+
+            # Draw handedness/gesture text
+            cv2.putText(annotated_image, f"{hand_label}, {gesture[0].category_name}",
+                        (text_x, text_y), cv2.FONT_HERSHEY_DUPLEX,
+                        FONT_SIZE, HANDEDNESS_TEXT_COLOR, FONT_THICKNESS, cv2.LINE_AA)
+
+        return annotated_image
 
     def stringify_detection(self, gesture_result):      
       hand_landmarks_list = gesture_result.hand_landmarks
@@ -118,6 +155,9 @@ class Mediapipe_HandsModule():
       gestures_list = gesture_result.gestures
 
       result = {}
+
+      bboxes = getattr(gesture_result, 'custom_bboxes', {})
+      
       # Loop through the detected hands.
       #print("akrim debugging: {}".format(gesture_result))
       #print("handedness_list: {}. len: {}".format(handedness_list, len(handedness_list)))
@@ -150,6 +190,10 @@ class Mediapipe_HandsModule():
         #print("hand: {}, row: {}".format(hand.lower(), row))
         #print("akrim idx: {}, prev result: {}".format(idx, result))
         result["hand/" + hand] = row
+
+        # 4. INJECT THE BBOX INTO THE DICTIONARY
+        if f"hand/{hand}" in bboxes:
+            result["bbox/" + hand] = bboxes[f"hand/{hand}"]
       #print("akrim hands result: {}".format(result))
       return result
     
@@ -164,6 +208,14 @@ class Mediapipe_HandsModule():
                     elif category.category_name == "Right":
                         category.category_name = "Left"
                         category.display_name = "Left"
+        bboxes = {}
+        if result and result.handedness:
+            w, h = output_image.width, output_image.height
+            for idx in range(len(result.handedness)):
+                hand_label = result.handedness[idx][0].category_name.lower()
+                bboxes[f"hand/{hand_label}"] = self._calculate_bounding_box(result.hand_landmarks[idx], w, h, BBOX_PADDING)
+        if result:
+            result.custom_bboxes = bboxes        
 
         self.gesture_result = result
         self.mp_image = output_image
@@ -190,6 +242,7 @@ class Mediapipe_HandsModule():
         # Add text overlay to the individual frame
         label = f"{camera_name}"
         cv2.putText(annotated_image, label, (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 3)
+        
         return annotated_image, result_dict
 
     def recognize_frame_async(self, is_enabled: bool, frame, timestamp_ms: int):
