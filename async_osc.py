@@ -665,6 +665,8 @@ async def model_worker(controller):
     model_key = controller.key
     try:
         while True:
+            start_time = asyncio.get_event_loop().time()
+            
             # DYNAMIC CHECK: Is my camera-specific task needed right now?
             if not is_detector_active(model_key):
                 if controller.name in latest_detections:
@@ -674,7 +676,6 @@ async def model_worker(controller):
                 await asyncio.sleep(0.1)
                 continue
                 
-            start_time = asyncio.get_event_loop().time()
             detection = await controller.detect()
             #print(f"detector {controller.enabled_detector} got detection")
             
@@ -694,7 +695,8 @@ async def model_worker(controller):
                                 net_stats.record_send(path, message)
                 else:
                     net_stats.record_no_send()
-            await asyncio.sleep(0.001)
+
+            await asyncio.sleep(compute_60fps_sleep_time(start_time))        
     except asyncio.CancelledError:
         pass # Task was intentionally killed
     finally:
@@ -765,7 +767,7 @@ def draw_hud(frame, stats):
 
 def resize_frame(frame):
     # Optional: Resize to ensure they match widths
-    target_w = 1024 #640 for low bandwidth. 1280 would be ideal if we weren't stacking frames.
+    target_w = 480 #1024 #640 for low bandwidth. 1280 would be ideal if we weren't stacking frames.
     h, w = frame.shape[:2]
     return cv2.resize(frame, (target_w, int(h * target_w / w)))
 
