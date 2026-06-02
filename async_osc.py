@@ -16,6 +16,8 @@ from model_target import ModelTarget
 
 from typing import NamedTuple
 
+import logging
+
 import sys
 import traceback
 import concurrent.futures
@@ -35,6 +37,14 @@ import objc
 
 from web.web_interface import WebInterface
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s.%(msecs)03d | %(levelname)-7s | %(message)s',
+    datefmt='%H:%M:%S',
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+
+logger = logging.getLogger("HollowMen")
 
 # set this to true to debug the raw frame (which is sent to Metal) 
 INCLUDE_ORIGINAL_FRAME_IN_GUI = False
@@ -60,7 +70,7 @@ class TdRouteKey(NamedTuple):
 
 def load_gesture_map(filepath):
     if not os.path.exists(filepath):
-        print(f"[WARNING] {filepath} not found. Routing disabled.")
+        logger.info(f"[WARNING] {filepath} not found. Routing disabled.")
         return {}
     with open(filepath, 'r') as f:
         return json.load(f)
@@ -218,22 +228,22 @@ class NetworkStats:
         details = " | ".join([f"{addr}: {count}" for addr, count in sorted_addresses])
         
         # 2. Print one consolidated line
-        print(f"[HEARTBEAT] {self.display_rate:>4.1f} m/s | {self.display_kbps:>5.1f} Kbps :: {details}")   
+        logger.info(f"[HEARTBEAT] {self.display_rate:>4.1f} m/s | {self.display_kbps:>5.1f} Kbps :: {details}")   
 
 
 # Initialize globally
 net_stats = NetworkStats()
 
 def handle_cameras(address: str, *args: List[Any]) -> None:
-    print("address: {}, message: {}".format(address, args))
+    logger.info("address: {}, message: {}".format(address, args))
     # We expect an even number of args. For "select" should be pairs of camera_name, model_type, no args for the other commands.
     if not len(args) % 2 == 0:
-        print("Unexpected dispatcher arguments for {}: {}".format(address, args))
+        logger.error("Unexpected dispatcher arguments for {}: {}".format(address, args))
         return
 
     # Check that address is expected
     if not address in ["/controller/cameras/start", "/controller/cameras/stop", "/controller/cameras/select", "/controller/cameras/direction"]:
-        print("Unexpected dispatcher address: {}".format(address))
+        logger.info("Unexpected dispatcher address: {}".format(address))
         return
 
     global cameras_enabled
@@ -241,19 +251,19 @@ def handle_cameras(address: str, *args: List[Any]) -> None:
     global in_setup_phase
     command = address.removeprefix("/controller/cameras/")
     if command == "start":
-        print("Starting the cameras.")
+        logger.info("Starting the cameras.")
         camera_setup.start_all_videos()
         in_setup_phase = True
     elif command == "stop":
-        print("Stopping the Cameras.")
+        logger.info("Stopping the Cameras.")
         camera_setup.close()
         in_setup_phase = False
     elif command == "direction":
         # Expects: [camera_name, orientation_string]
         # Example: ["Camera_0", "FLIP_SIDE"]
-        print("changing camera direction.")
+        logger.info("changing camera direction.")
         if len(args) != 2:
-            print(f"Error: orientation requires [camera_name, mode]. Got: {args}")
+            logger.error(f"Error: orientation requires [camera_name, mode]. Got: {args}")
             return
             
         target_cam = args[0]
@@ -264,24 +274,24 @@ def handle_cameras(address: str, *args: List[Any]) -> None:
             direction = CameraDirection(mode_str)
         except ValueError:
             valid_keys = [e.value for e in CameraDirection]
-            print(f"Error: Invalid orientation '{mode_str}'. Must be one of: {valid_keys}")
+            logger.error(f"Error: Invalid orientation '{mode_str}'. Must be one of: {valid_keys}")
             return
 
         manager = camera_setup.video_managers.get(target_cam)
         if manager:
-            print(f"changing camera direction: {target_cam} {mode_str}")
+            logger.info(f"changing camera direction: {target_cam} {mode_str}")
             manager.set_camera_direction(direction)
         else:
-            print(f"didn't find manager for camera {target_cam}")    
+            logger.warn(f"didn't find manager for camera {target_cam}")    
         return    
     else:
-        print("unrecognized command: " + command)
+        logger.error("unrecognized command: " + command)
   
 
 def setup_selected_models(keys_to_spawn: list, camera_name_to_camera: dict) -> None:
     global model_controllers
     # Clear the specific category if needed, or just update
-    print(f"setup_selected_models pairs {keys_to_spawn} {camera_name_to_camera}")
+    logger.info(f"setup_selected_models pairs {keys_to_spawn} {camera_name_to_camera}")
     
     for key in keys_to_spawn:
         camera_name = key.camera_name
@@ -293,10 +303,10 @@ def setup_selected_models(keys_to_spawn: list, camera_name_to_camera: dict) -> N
                 camera_obj = camera_name_to_camera.get(camera_name)
 
                 if camera_obj is None:
-                    print(f"[ERROR] Could not assign {detector_type.name} to {camera_name}. Camera does not exist or is not started.")
+                    logger.error(f"[ERROR] Could not assign {detector_type.name} to {camera_name}. Camera does not exist or is not started.")
                     continue # Skip this iteration
 
-                print(f"Initializing {key}")
+                logger.info(f"Initializing {key}")
 
                 model_controllers[key] = ModelController(
                     key,
@@ -305,13 +315,13 @@ def setup_selected_models(keys_to_spawn: list, camera_name_to_camera: dict) -> N
                     model_target,
                     compute_executor
                 )
-    print("finished initializing model controllers for detectors {}".format(model_controllers.keys()))    
+    logger.info("finished initializing model controllers for detectors {}".format(model_controllers.keys()))    
  
 
 
 def setup_segment_models(camera_name_to_camera: dict) -> None:
     global model_controllers
-    print(f"setup_segment_models {camera_name_to_camera}")
+    logger.info(f"setup_segment_models {camera_name_to_camera}")
     for cam_name, camera in camera_name_to_camera.items():
         if cam_name != "None":
             key = ModelKey(cam_name, Detector.SEGMENT, ModelTarget.BODY)
@@ -319,7 +329,7 @@ def setup_segment_models(camera_name_to_camera: dict) -> None:
                 model_controllers[key] = ModelController(key, camera, key.detector, key.model_target, compute_executor)
 
 def handle_models(address: str, *args: List[Any]) -> None:
-    print("address: {}, message: {}".format(address, args))
+    logger.info("address: {}, message: {}".format(address, args))
 
     expected_addresses = ["/controller/models/assign", 
     "/controller/models/HANDS/on", "/controller/models/HANDS/off", 
@@ -328,7 +338,7 @@ def handle_models(address: str, *args: List[Any]) -> None:
 
 
     if not address in expected_addresses:
-        print("Unexpected dispatcher address: {}".format(address))
+        logger.error("Unexpected dispatcher address: {}".format(address))
         return
 
     global detectors_to_enabled
@@ -340,7 +350,7 @@ def handle_models(address: str, *args: List[Any]) -> None:
     model_instruction = address.removeprefix("/controller/models/").split("/")
 
     if model_instruction[0] == "assign":
-        print(f"Received /assign command. Resetting state with args: {args}")
+        logger.info(f"Received /assign command. Resetting state with args: {args}")
 
         if latest_detections:
             latest_detections.clear()
@@ -356,10 +366,10 @@ def handle_models(address: str, *args: List[Any]) -> None:
 
         stream_state = StreamState() # reset
         
-        print("Selecting models to use and pairing with cameras.")
+        logger.info("Selecting models to use and pairing with cameras.")
         
         if not len(args) >= 2 and not len(args) % 2 == 0:
-            print("Unexpected args, must have at least one camera to use, and must have camera-model pairs.")
+            logger.error("Unexpected args, must have at least one camera to use, and must have camera-model pairs.")
             return
 
         keys_to_spawn = []
@@ -392,11 +402,11 @@ def handle_models(address: str, *args: List[Any]) -> None:
             else: raise ValueError(f"Unrecognized detector {detector_type}.")
      
 
-        print(f"Creating controllers for keys: {keys_to_spawn}")
+        logger.info(f"Creating controllers for keys: {keys_to_spawn}")
 
         # Reset enabled state based on the *Assignments* requested
         detectors_to_enabled = {mode: False for mode in assigned_modes_present}
-        print(f"Initial detector states: {detectors_to_enabled}")
+        logger.info(f"Initial detector states: {detectors_to_enabled}")
         
         # Clean up unused cameras
         unique_cameras = set(k.camera_name for k in keys_to_spawn)
@@ -411,38 +421,38 @@ def handle_models(address: str, *args: List[Any]) -> None:
         # we can pass ModelKeys directly as they are NamedTuples (behave like tuples).
         setup_selected_models(keys_to_spawn, camera_setup.video_managers)
         setup_segment_models(camera_setup.video_managers)
-        print("Done assigning models.")
+        logger.info("Done assigning models.")
         return
 
     command = model_instruction[1]
     detector = Detector[model_instruction[0]]
     if command == "on":
-        print("Starting the {} model.".format(detector))
+        logger.info("Starting the {} model.".format(detector))
         detectors_to_enabled[detector] = True
     elif command == "off":
-        print("Stopping the Hands model.") 
+        logger.info("Stopping the Hands model.") 
         detectors_to_enabled[detector] = False
     else:
-        print("unrecognized command: " + command)            
+        logger.error("unrecognized command: " + command)            
 
 
 def handle_feedback(address: str, *args: List[Any]) -> None:
-    print("address: {}, message: {}".format(address, args))
+    logger.info("address: {}, message: {}".format(address, args))
     # We expect 3 args {event number, current gesture, next gesture}
     if not len(args) == 3:
-        print("Unexpected dispatcher arguments for {}: {}".format(address, args))
+        logger.error("Unexpected dispatcher arguments for {}: {}".format(address, args))
         return
 
     # Check that address is expected
     if not address in ["/feedback/events"]:
-        print("Unexpected dispatcher address: {}".format(address))
+        logger.error("Unexpected dispatcher address: {}".format(address))
         return
 
     global stream_state
 
     command = address.removeprefix("/feedback/")
     if command == "events":
-        print(f"Got an event change: {args}")
+        logger.info(f"Got an event change: {args}")
         stream_state.event_number = args[0]
         stream_state.current_gesture = args[1]
 
@@ -453,7 +463,7 @@ def handle_feedback(address: str, *args: List[Any]) -> None:
         # Safety net: replace underscores if you're still transitioning Max data
         stream_state.next_gesture = instruction_text.replace("_", " ")
     else:
-        print("unrecognized command: " + command)
+        logger.error("unrecognized command: " + command)
 
 def handle_gesture_event(address: str, *args: List[Any]) -> None:
     global scene_3_active_routes
@@ -543,15 +553,15 @@ def log_task_exceptions(task: asyncio.Task):
         # This retrieves the exception if one occurred
         exc = task.exception() 
         if exc:
-            print(f"\n[!!! CRITICAL TASK FAILURE !!!]")
+            logger.error(f"\n[!!! CRITICAL TASK FAILURE !!!]")
             # This prints the actual error line numbers
             traceback.print_exception(type(exc), exc, exc.__traceback__)
-            print("[!!! END ERROR REPORT !!!]\n")
+            logger.error("[!!! END ERROR REPORT !!!]\n")
     except asyncio.CancelledError:
         # This is normal during shutdown
         pass
     except Exception as e:
-        print(f"[ERROR] Could not retrieve task exception: {e}")
+        logger.error(f"[ERROR] Could not retrieve task exception: {e}")
 
 async def model_supervisor():
     """Manages the lifecycle of model workers using ModelKey abstraction."""
@@ -563,7 +573,7 @@ async def model_supervisor():
         # 2. Spawn new models
         for key in desired_keys - active_keys:
             controller = model_controllers[key]
-            print(f"[SUPERVISOR] Spawning worker: {key}")
+            logger.info(f"[SUPERVISOR] Spawning worker: {key}")
             
             task = asyncio.create_task(model_worker(controller))
             running_tasks[key] = task
@@ -573,7 +583,7 @@ async def model_supervisor():
 
         # 3. Kill removed models
         for key in active_keys - desired_keys:
-            print(f"[SUPERVISOR] Pruning worker: {key}")
+            logger.info(f"[SUPERVISOR] Pruning worker: {key}")
             running_tasks[key].cancel()
             del running_tasks[key]
 
@@ -871,7 +881,7 @@ async def syphon_manager_iteration(loop, latest_detections, syphon_bridges):
             if semantic_name not in syphon_bridges:
                 output_name = "HollowManVideo_" + semantic_name
                 syphon_bridges[semantic_name] = MetalVideoBridge(W, H, output_name)
-                print("Created new MetalVideoBridge, sending video to metal as: {}".format(output_name))
+                logger.info("Created new MetalVideoBridge, sending video to metal as: {}".format(output_name))
 
             await loop.run_in_executor(gpu_executor, publish_to_metal, syphon_bridges[semantic_name], frame)
 
@@ -908,18 +918,18 @@ async def test_sequence_injector(model_mapping):
     Simulates a sequence of OSC messages to automate the setup process.
     """
 
-    print("\n[TEST LAYER] Starting automated test sequence...")
+    logger.info("\n[TEST LAYER] Starting automated test sequence...")
     await asyncio.sleep(1)
 
     # 1. Start the cameras
-    print("[TEST LAYER] camera setup starting: /controller/cameras/start")
+    logger.info("[TEST LAYER] camera setup starting: /controller/cameras/start")
     inject_osc_message("/controller/cameras/start", [])
     await asyncio.sleep(0.5)
-    print("[TEST LAYER] camera setup done: /controller/cameras/stop")
+    logger.info("[TEST LAYER] camera setup done: /controller/cameras/stop")
     inject_osc_message("/controller/cameras/stop", [])
 
 
-    print(f"[TEST LAYER] Starting models: /controller/models/assign {model_mapping}")
+    logger.info(f"[TEST LAYER] Starting models: /controller/models/assign {model_mapping}")
     inject_osc_message("/controller/models/assign", model_mapping)
     await asyncio.sleep(2)
 
@@ -929,27 +939,27 @@ async def test_sequence_injector(model_mapping):
         model_name = model_mapping[i]
         osc_path = f"/controller/models/{model_name}/on"
         
-        print(f"[TEST LAYER] Enabling model: {osc_path}")
+        logger.info(f"[TEST LAYER] Enabling model: {osc_path}")
         inject_osc_message(osc_path, [])
         
         # Small delay between activations to prevent race conditions
         await asyncio.sleep(0.5)
     
-    print("[TEST LAYER] Sequence complete. Server is now running in test state.\n")
+    logger.info("[TEST LAYER] Sequence complete. Server is now running in test state.\n")
 
 async def cleanup():
     """Gracefully shuts down all components in the correct order"""
-    print("\n--- Starting Graceful Shutdown ---")
+    logger.info("\n--- Starting Graceful Shutdown ---")
 
     for key, task in running_tasks.items():
-        print(f"Cancelling task: {key}")
+        logger.info(f"Cancelling task: {key}")
         task.cancel()
 
     if running_tasks:
         await asyncio.gather(*running_tasks.values(), return_exceptions=True)
 
     # Close Model Controllers
-    print(f"Closing {len(model_controllers)} model controllers...")
+    logger.info(f"Closing {len(model_controllers)} model controllers...")
     for (cam_name, detector, model_target), controller in model_controllers.items():
         try:
             controller.close()
@@ -958,29 +968,29 @@ async def cleanup():
             pass
     model_controllers.clear()        
     
-    print("Closing cameras...")
+    logger.info("Closing cameras...")
     camera_setup.close()
 
     # Shutdown the ThreadPoolExecutor
-    print("Shutting down executors...")
+    logger.info("Shutting down executors...")
     compute_executor.shutdown(wait=True, cancel_futures=True)
     gpu_executor.shutdown(wait=True, cancel_futures=True)
 
     # Close Metal Bridges (Crucial: Stop Syphon before Metal device is killed)
-    print(f"Closing {len(syphon_bridges)} Syphon bridges...")
+    logger.info(f"Closing {len(syphon_bridges)} Syphon bridges...")
     for name, bridge in syphon_bridges.items():
         try:
             bridge.close() # This calls syphon_server.stop()
         except Exception as e:
-            print(f"Error closing bridge {name}: {e}")
+            logger.info(f"Error closing bridge {name}: {e}")
     syphon_bridges.clear()
 
-    print("Stopping Web Interface...")
+    logger.info("Stopping Web Interface...")
     await web.stop()    
     
     # Destroy OpenCV Windows
     cv2.destroyAllWindows()
-    print("--- Shutdown Complete ---")
+    logger.info("--- Shutdown Complete ---")
 
 # When in test mode, test python code without a MaxMsp dependancy. Turn this OFF when using MaxMsp!
 async def main(test_mode=False):    
@@ -1005,7 +1015,7 @@ async def main(test_mode=False):
 
 
     if test_mode:
-        print("[INFO] Running in TEST MODE.")
+        logger.info("[INFO] Running in TEST MODE.")
         tasks.append(test_sequence_injector(model_mapping))
 
     try:
