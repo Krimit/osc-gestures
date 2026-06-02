@@ -39,8 +39,11 @@ from web.web_interface import WebInterface
 # set this to true to debug the raw frame (which is sent to Metal) 
 INCLUDE_ORIGINAL_FRAME_IN_GUI = False
 
- # Shared executor
-executor = concurrent.futures.ThreadPoolExecutor(max_workers=16)
+ # Shared executor for computations (models, video)
+compute_executor = concurrent.futures.ThreadPoolExecutor(max_workers=16)
+
+# Dedicated executor for pushing frames to gpu (syphon)
+gpu_executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
 ip = "127.0.0.1"
 recieve_port = 5061
@@ -300,7 +303,7 @@ def setup_selected_models(keys_to_spawn: list, camera_name_to_camera: dict) -> N
                     camera_obj, 
                     detector_type,
                     model_target,
-                    executor
+                    compute_executor
                 )
     print("finished initializing model controllers for detectors {}".format(model_controllers.keys()))    
  
@@ -313,7 +316,7 @@ def setup_segment_models(camera_name_to_camera: dict) -> None:
         if cam_name != "None":
             key = ModelKey(cam_name, Detector.SEGMENT, ModelTarget.BODY)
             if key not in model_controllers:
-                model_controllers[key] = ModelController(key, camera, key.detector, key.model_target, executor)
+                model_controllers[key] = ModelController(key, camera, key.detector, key.model_target, compute_executor)
 
 def handle_models(address: str, *args: List[Any]) -> None:
     print("address: {}, message: {}".format(address, args))
@@ -797,7 +800,7 @@ async def gui_manager_iteration(latest_detections):
             
             loop = asyncio.get_running_loop()
             # Do NOT await yet. Just schedule the task.
-            task = loop.run_in_executor(executor, encode_frame_task, raw_frame)
+            task = loop.run_in_executor(compute_executor, encode_frame_task, raw_frame)
             encode_tasks.append((str(i), task))
 
     # Wait for all threads to finish in parallel
@@ -870,7 +873,7 @@ async def syphon_manager_iteration(loop, latest_detections, syphon_bridges):
                 syphon_bridges[semantic_name] = MetalVideoBridge(W, H, output_name)
                 print("Created new MetalVideoBridge, sending video to metal as: {}".format(output_name))
 
-            await loop.run_in_executor(executor, publish_to_metal, syphon_bridges[semantic_name], frame)
+            await loop.run_in_executor(gpu_executor, publish_to_metal, syphon_bridges[semantic_name], frame)
 
 
 async def syphon_manager():
@@ -959,8 +962,9 @@ async def cleanup():
     camera_setup.close()
 
     # Shutdown the ThreadPoolExecutor
-    print("Shutting down executor...")
-    executor.shutdown(wait=True, cancel_futures=True)
+    print("Shutting down executors...")
+    compute_executor.shutdown(wait=True, cancel_futures=True)
+    gpu_executor.shutdown(wait=True, cancel_futures=True)
 
     # Close Metal Bridges (Crucial: Stop Syphon before Metal device is killed)
     print(f"Closing {len(syphon_bridges)} Syphon bridges...")
