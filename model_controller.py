@@ -123,10 +123,7 @@ class ModelController():
 
     #@timeit_async
     async def _get_frame(self):
-        """Offloads the blocking OpenCV read to a thread"""
-        loop = asyncio.get_running_loop()
-        frame = await loop.run_in_executor(self.executor, self.video_manager.capture_frame)
-        return frame
+        return self.video_manager.capture_frame()
 
     async def _get_annotated_frame(self, module, frame, result):
         loop = asyncio.get_running_loop()
