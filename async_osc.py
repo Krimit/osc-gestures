@@ -992,6 +992,40 @@ async def cleanup():
     cv2.destroyAllWindows()
     logger.info("--- Shutdown Complete ---")
 
+
+
+async def monitor_thread_pool(executor, pool_name, timeout=1.0, check_interval=2.0):
+    """Submits a canary task. If it hangs, the pool is starved."""
+    def canary():
+        return True # Trivial task
+    
+    while True:
+        loop = asyncio.get_running_loop()
+        try:
+            # Give the pool 'timeout' seconds to process an empty function
+            await asyncio.wait_for(
+                loop.run_in_executor(executor, canary), 
+                timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            logger.critical(f"[THREAD STARVATION] {pool_name} ThreadPool is completely deadlocked/full!")
+        except Exception as e:
+            logger.error(f"Monitor error: {e}")
+            
+        await asyncio.sleep(check_interval)
+
+async def monitor_event_loop_lag():
+    """Measures if the main async loop is being blocked."""
+    target_sleep = 0.5
+    while True:
+        start = asyncio.get_event_loop().time()
+        await asyncio.sleep(target_sleep)
+        elapsed = asyncio.get_event_loop().time() - start
+        
+        lag = elapsed - target_sleep
+        if lag > 0.05: # Warn if the loop blocked for more than 50ms
+            logger.warning(f"[LOOP LAG] Event loop was blocked for {lag * 1000:.1f}ms!")
+
 # When in test mode, test python code without a MaxMsp dependancy. Turn this OFF when using MaxMsp!
 async def main(test_mode=False):    
     server = AsyncIOOSCUDPServer((ip, recieve_port), dispatcher, asyncio.get_event_loop())
@@ -1002,7 +1036,11 @@ async def main(test_mode=False):
         camera_selection(), # Manages camera setup phase
         gui_manager(),      # OpenCV debug window
         syphon_manager(),   # GPU / Syphon output
-        web.start() # publish to web for iPad
+        web.start(), # publish to web for iPad
+        # --- Health Monitors ---
+        monitor_thread_pool(compute_executor, "ComputeExecutor"),
+        monitor_thread_pool(gpu_executor, "GPUExecutor"),
+        monitor_event_loop_lag()
     ]
 
     # Adjust this as needed when testing
