@@ -16,6 +16,14 @@ training/deprecated_training_data/
 training/training_data.zip
 unused_models/
 
+# debugging files
+clean_history.txt
+clean_logs.txt
+debug_crash_log.txt
+error_log.txt
+filter_history.py
+
+
 # Sublime stuff
 sensors.sublime-workspace
 sensors.sublime-project

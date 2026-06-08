@@ -7,6 +7,10 @@ import argparse
 import cv2
 from typing import List, Any
 import asyncio
+
+AX_CONCURRENT_ENCODES = 4
+GUI_ENCODE_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_ENCODES)
+
 import numpy as np
 import time
 from camera_direction import CameraDirection
@@ -784,6 +788,23 @@ def resize_frame(frame):
     h, w = frame.shape[:2]
     return cv2.resize(frame, (target_w, int(h * target_w / w)))
 
+async def safe_encode_frame(frame, executor):
+    """
+    Wraps the blocking cv2.imencode task with a strict queue guard.
+    Preserves parallel execution but sheds load instantly if saturated.
+    """
+    # If the semaphore is locked, the GUI queue is full (network backpressure).
+    # Immediately drop the frame to protect the core compute pool.
+    if GUI_ENCODE_SEMAPHORE.locked():
+        logger.debug("[LOAD SHEDDING] GUI thread limit reached. Dropping frame, the Web UI may be noticeably jittery.")
+        return None
+
+    async with GUI_ENCODE_SEMAPHORE:
+        loop = asyncio.get_running_loop()
+        # Execute the CPU-bound compression safely in the isolated thread pool
+        return await loop.run_in_executor(executor, encode_frame_task, frame)
+
+
 #@timeit_async
 async def gui_manager_iteration(latest_detections):
     # 1. Update Model Stats for the HUD
@@ -810,7 +831,7 @@ async def gui_manager_iteration(latest_detections):
             
             loop = asyncio.get_running_loop()
             # Do NOT await yet. Just schedule the task.
-            task = loop.run_in_executor(compute_executor, encode_frame_task, raw_frame)
+            task = asyncio.create_task(safe_encode_frame(raw_frame, compute_executor))
             encode_tasks.append((str(i), task))
 
     # Wait for all threads to finish in parallel
@@ -1047,8 +1068,8 @@ async def main(test_mode=False):
     #model_mapping = ["Camera_0", "FACE"]
     #model_mapping = ["Camera_1", "HANDS"]
     #model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
-    model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS_AND_FACE", "Camera_0", "HANDS"]
-    #model_mapping = ["Camera_1", "FACE", "Camera_1", "HANDS_AND_FACE", "Camera_1", "HANDS"]
+    #model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS_AND_FACE", "Camera_0", "HANDS"]
+    model_mapping = ["Camera_1", "FACE", "Camera_1", "HANDS_AND_FACE", "Camera_1", "HANDS"]
     #model_mapping = ["Camera_1", "HANDS_AND_FACE"]
 
 
