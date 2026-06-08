@@ -121,10 +121,6 @@ class ModelController():
     def _update_timestamp(self):
         self.timestamp = max(self.timestamp + 1, int(time.time() * 1000))
 
-    #@timeit_async
-    async def _get_frame(self):
-        return self.video_manager.capture_frame()
-
     async def _get_annotated_frame(self, module, frame, result):
         loop = asyncio.get_running_loop()
         annotated_frame, results_dict = await loop.run_in_executor(
@@ -166,7 +162,7 @@ class ModelController():
         if not self.is_open(): return None
                 
         if not self.in_progress:
-            self.original_frame = await self._get_frame()
+            self.original_frame = self.video_manager.capture_frame()
             self._update_timestamp()
             self._submit_inference(self.hands_module, self.original_frame, self.timestamp)
             self.in_progress = True
@@ -190,7 +186,7 @@ class ModelController():
         if not self.is_open(): return None
                 
         if not self.in_progress:
-            self.original_frame = await self._get_frame()
+            self.original_frame = self.video_manager.capture_frame()
             self._update_timestamp()
             self._submit_inference(self.face_module, self.original_frame, self.timestamp)
             self.in_progress = True
@@ -214,7 +210,7 @@ class ModelController():
 
         # 1. Fire both tasks
         if not self.in_progress:
-            self.original_frame = await self._get_frame()
+            self.original_frame = self.video_manager.capture_frame()
             self._update_timestamp()
             
             self._submit_inference(self.hands_module, self.original_frame, self.timestamp)
@@ -252,7 +248,7 @@ class ModelController():
             return None
                 
         if not self.in_progress:
-            self.original_frame = await self._get_frame()
+            self.original_frame = self.video_manager.capture_frame()
             self._update_timestamp()
             small_frame = self.original_frame #small_frame = cv2.resize(self.original_frame, RESIZE_DIM, interpolation=cv2.INTER_AREA)
             self.segment_module.recognize_frame_async(True, small_frame, self.timestamp) 

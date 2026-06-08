@@ -65,24 +65,25 @@
                     const img = document.createElement('img');
                     img.className = 'stream-img';
                     
-                    // PULL LOGIC: Fetch next frame on success
-                    img.onload = () => {
-                        // STOP if the cell was removed from the screen (fixes the memory leak)
+                    const triggerNextFrame = () => {
+                        // STOP if the cell was removed from the screen (fixes memory leak)
                         if (!img.isConnected) return; 
                         
-                        // Pace the requests to ~30fps to avoid flooding your local router
+                        // Pace requests to ~30fps
                         setTimeout(() => {
                             img.src = `/video/${id}?t=${Date.now()}`;
                         }, 33); 
                     };
 
+                    // PULL LOGIC: Fetch next frame on success
+                    img.onload = triggerNextFrame;
+
+
+
                     // RECOVERY LOGIC: Try again if the network drops (fixes the silent death)
                     img.onerror = () => {
-                        if (!img.isConnected) return;
-                        console.warn(`Connection to stream ${id} dropped. Retrying...`);
-                        setTimeout(() => {
-                            img.src = `/video/${id}?t=${Date.now()}`;
-                        }, 500);
+                        console.warn(`Stream ${id} dropped a frame. Auto-recovering...`);
+                        triggerNextFrame(); 
                     };
 
                     // Kick off the first request

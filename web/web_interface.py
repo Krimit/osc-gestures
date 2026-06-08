@@ -1,9 +1,13 @@
 from aiohttp import web
 
+import async_timeout
 import time
 import asyncio
 import json
 import os
+
+import logging
+logging.getLogger('aiohttp.access').setLevel(logging.WARNING)
 
 class WebInterface:
     def __init__(self, port=8191, stream_state=None):
@@ -59,21 +63,27 @@ class WebInterface:
         if not frame_data:
             return web.Response(status=404)
 
-        # Return as a standard single JPEG image
-        return web.Response(
-            body=frame_data,
-            content_type='image/jpeg',
-            headers={
-                'Cache-Control': 'no-store, no-cache, must-revalidate, pre-check=0, post-check=0, max-age=0',
-                'Pragma': 'no-cache'
-            }
-        )
+        try:
+            # Enforce a strict < 5ms timeout on the socket write.
+            # If the client's TCP window is full, we abandon the write instantly.
+            async with async_timeout.timeout(0.005): 
+                return web.Response(
+                    body=frame_data,
+                    content_type='image/jpeg',
+                    headers={
+                        'Cache-Control': 'no-store, no-cache, must-revalidate, pre-check=0, post-check=0, max-age=0',
+                        'Pragma': 'no-cache'
+                    }
+                )
+        except asyncio.TimeoutError:
+            # Network backpressure detected. Drop the frame and free the memory.
+            return web.Response(status=503) # Service Unavailable
 
 
     async def start(self):
         self.runner = web.AppRunner(self.app)
         await self.runner.setup()
-        site = web.TCPSite(self.runner, '0.0.0.0', self.port)
+        site = web.TCPSite(self.runner, '0.0.0.0', self.port, access_log=None)
         print(f"--- WEB INTERFACE READY at http://0.0.0.0:{self.port} ---")
         await site.start()
 
