@@ -57,11 +57,15 @@ class WebInterface:
 
         # Background task to push updates to the client
         async def send_updates():
+            last_sent_time = 0
             try:
                 while not ws.closed:
                     if not self.stream_state:
-                        data = {"event": -1, "current": "Error", "next": "No State", "fps_gpu": 0, "mps_osc": 0, "active_videos": []}
-                    else:
+                        await asyncio.sleep(0.05)
+                        continue
+                    if self.stream_state.last_updated > last_sent_time:
+                        last_sent_time = self.stream_state.last_updated
+
                         active_ids = list(self.stream_state.frame_bytes.keys())
                         data = {
                             "event": self.stream_state.event_number,
@@ -71,8 +75,10 @@ class WebInterface:
                             "mps_osc": self.stream_state.mps_osc,
                             "active_videos": active_ids,
                         }
-                    await ws.send_json(data)
-                    await asyncio.sleep(0.1)
+                        await ws.send_json(data)
+
+                    # Sleep for 50ms whether we sent a message or not
+                    await asyncio.sleep(0.05)
             except Exception:
                 pass # Client disconnected or network dropped
 

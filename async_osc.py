@@ -131,6 +131,7 @@ class StreamState:
         # Stats
         self.mps_osc = 0
         self.fps_gpu = 0
+        self.last_updated = time.time()
 
 
 # Web page for performer tracking.
@@ -443,7 +444,7 @@ def handle_models(address: str, *args: List[Any]) -> None:
 def handle_feedback(address: str, *args: List[Any]) -> None:
     logger.info("address: {}, message: {}".format(address, args))
     # We expect 3 args {event number, current gesture, next gesture}
-    if not len(args) == 3:
+    if len(args) < 3:
         logger.error("Unexpected dispatcher arguments for {}: {}".format(address, args))
         return
 
@@ -466,6 +467,7 @@ def handle_feedback(address: str, *args: List[Any]) -> None:
 
         # Safety net: replace underscores if you're still transitioning Max data
         stream_state.next_gesture = instruction_text.replace("_", " ")
+        stream_state.last_updated = time.time()
     else:
         logger.error("unrecognized command: " + command)
 
@@ -1068,8 +1070,8 @@ async def main(test_mode=False):
     #model_mapping = ["Camera_0", "FACE"]
     #model_mapping = ["Camera_1", "HANDS"]
     #model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
-    model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS_AND_FACE", "Camera_0", "HANDS"]
-    #model_mapping = ["Camera_1", "FACE", "Camera_1", "HANDS_AND_FACE", "Camera_1", "HANDS"]
+    #model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS_AND_FACE", "Camera_0", "HANDS"]
+    model_mapping = ["Camera_1", "FACE", "Camera_1", "HANDS_AND_FACE", "Camera_1", "HANDS"]
     #model_mapping = ["Camera_1", "HANDS_AND_FACE"]
 
 
