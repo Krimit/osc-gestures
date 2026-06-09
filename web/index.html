@@ -31,10 +31,13 @@
     </div>
 
 <script>
-    async function update() {
-        try {
-            const r = await fetch('/api/status');
-            const d = await r.json();
+    function connectWebSocket() {
+        // Automatically build the WS URL based on the current host
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${protocol}//${window.location.host}/performance_instruction`);
+
+        ws.onmessage = (event) => {
+            const d = JSON.parse(event.data);
             
             document.getElementById('event-num').innerText = d.event;
             document.getElementById('curr-g-val').innerText = (d.current || "IDLE").replace(/_/g, " ");
@@ -44,18 +47,16 @@
 
             // DYNAMIC LAYOUT SNAP
             const container = document.getElementById('video-container');
-
-            // Safely grab the array sent by the Python backend (e.g., ["0", "1"])
             const activeIds = (d.active_videos || []).map(String); 
 
-            // 1. Remove cells from the screen if the server says they are no longer active
+            // 1. Remove inactive cells
             Array.from(container.children).forEach(cell => {
                 if (!activeIds.includes(cell.dataset.id)) {
                     cell.remove();
                 }
             });
 
-            // 2. Create new cells for active streams not yet rendered
+            // 2. Create new cells
             activeIds.forEach(id => {
                 if (!document.querySelector(`.video-cell[data-id="${id}"]`)) {
                     const cell = document.createElement('div');
@@ -65,41 +66,30 @@
                     const img = document.createElement('img');
                     img.className = 'stream-img';
                     
-                    // PULL LOGIC: Fetch next frame on success
-                    img.onload = () => {
-                        // STOP if the cell was removed from the screen (fixes the memory leak)
-                        if (!img.isConnected) return; 
-                        
-                        // Pace the requests to ~30fps to avoid flooding your local router
-                        setTimeout(() => {
-                            img.src = `/video/${id}?t=${Date.now()}`;
-                        }, 33); 
-                    };
+                    // With MJPEG, you just point the src at the endpoint once.
+                    // The browser takes over and continuously updates the image.
+                    img.src = `/video/${id}`;
 
-                    // RECOVERY LOGIC: Try again if the network drops (fixes the silent death)
+                    // Simple recovery: if the server reboots, the stream will break.
+                    // This attempts to reconnect the stream every 1 second.
                     img.onerror = () => {
-                        if (!img.isConnected) return;
-                        console.warn(`Connection to stream ${id} dropped. Retrying...`);
+                        console.warn(`Stream ${id} disconnected. Attempting reconnect...`);
                         setTimeout(() => {
-                            img.src = `/video/${id}?t=${Date.now()}`;
-                        }, 500);
+                            img.src = `/video/${id}?retry=${Date.now()}`;
+                        }, 1000);
                     };
 
-                    // Kick off the first request
-                    img.src = `/video/${id}?t=${Date.now()}`;
-                    
                     cell.appendChild(img);
                     container.appendChild(cell);
                 }
             });
-        } catch(e) {
-            // Silently catch network drops
-        }
-        setTimeout(update, 100);
+        };
+
+        // Auto-Reconnect if the Python server restarts
+        ws.onclose = () => setTimeout(connectWebSocket, 1000);
     }
-    
-    // Start the loop, which is managed internally by the update method
-    update()
+
+    connectWebSocket();
 </script>
 </body>
 </html>
