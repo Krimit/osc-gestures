@@ -1,6 +1,5 @@
 from aiohttp import web
 
-import async_timeout
 import time
 import asyncio
 import json
@@ -66,7 +65,7 @@ class WebInterface:
         try:
             # Enforce a strict < 5ms timeout on the socket write.
             # If the client's TCP window is full, we abandon the write instantly.
-            async with async_timeout.timeout(0.005): 
+            async with asyncio.timeout(0.005):
                 return web.Response(
                     body=frame_data,
                     content_type='image/jpeg',
@@ -81,9 +80,9 @@ class WebInterface:
 
 
     async def start(self):
-        self.runner = web.AppRunner(self.app)
+        self.runner = web.AppRunner(self.app, access_log=None)
         await self.runner.setup()
-        site = web.TCPSite(self.runner, '0.0.0.0', self.port, access_log=None)
+        site = web.TCPSite(self.runner, '0.0.0.0', self.port)
         print(f"--- WEB INTERFACE READY at http://0.0.0.0:{self.port} ---")
         await site.start()
 

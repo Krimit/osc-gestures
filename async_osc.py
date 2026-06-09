@@ -8,7 +8,7 @@ import cv2
 from typing import List, Any
 import asyncio
 
-AX_CONCURRENT_ENCODES = 4
+MAX_CONCURRENT_ENCODES = 4
 GUI_ENCODE_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_ENCODES)
 
 import numpy as np
@@ -1068,8 +1068,8 @@ async def main(test_mode=False):
     #model_mapping = ["Camera_0", "FACE"]
     #model_mapping = ["Camera_1", "HANDS"]
     #model_mapping = ["Camera_0", "FACE", "Camera_1", "HANDS"]
-    #model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS_AND_FACE", "Camera_0", "HANDS"]
-    model_mapping = ["Camera_1", "FACE", "Camera_1", "HANDS_AND_FACE", "Camera_1", "HANDS"]
+    model_mapping = ["Camera_0", "FACE", "Camera_0", "HANDS_AND_FACE", "Camera_0", "HANDS"]
+    #model_mapping = ["Camera_1", "FACE", "Camera_1", "HANDS_AND_FACE", "Camera_1", "HANDS"]
     #model_mapping = ["Camera_1", "HANDS_AND_FACE"]
 
 
