@@ -66,20 +66,19 @@
                     const img = document.createElement('img');
                     img.className = 'stream-img';
                     
-                    const triggerNextFrame = () => {
-                        if (!img.isConnected) return; 
-                        setTimeout(() => {
-                            img.src = `/video/${id}?t=${Date.now()}`;
-                        }, 33); 
-                    };
+                    // With MJPEG, you just point the src at the endpoint once.
+                    // The browser takes over and continuously updates the image.
+                    img.src = `/video/${id}`;
 
-                    img.onload = triggerNextFrame;
+                    // Simple recovery: if the server reboots, the stream will break.
+                    // This attempts to reconnect the stream every 1 second.
                     img.onerror = () => {
-                        console.warn(`Stream ${id} dropped a frame. Auto-recovering...`);
-                        triggerNextFrame(); 
+                        console.warn(`Stream ${id} disconnected. Attempting reconnect...`);
+                        setTimeout(() => {
+                            img.src = `/video/${id}?retry=${Date.now()}`;
+                        }, 1000);
                     };
 
-                    img.src = `/video/${id}?t=${Date.now()}`;
                     cell.appendChild(img);
                     container.appendChild(cell);
                 }

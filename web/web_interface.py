@@ -90,27 +90,45 @@ class WebInterface:
     async def handle_video_feed(self, request):
         video_id = request.match_info.get('id')
         
-        # Just get the current frame data once
-        frame_data = self.stream_state.frame_bytes.get(video_id)
-        
-        if not frame_data:
-            return web.Response(status=404)
+        # Set up a streaming response
+        response = web.StreamResponse(
+            status=200,
+            reason='OK',
+            headers={
+                'Content-Type': 'multipart/x-mixed-replace; boundary=frame',
+                'Cache-Control': 'no-store, no-cache, must-revalidate, pre-check=0, post-check=0, max-age=0',
+                'Pragma': 'no-cache'
+            }
+        )
+        await response.prepare(request)
 
         try:
-            # Enforce a strict < 5ms timeout on the socket write.
-            # If the client's TCP window is full, we abandon the write instantly.
-            async with asyncio.timeout(0.005):
-                return web.Response(
-                    body=frame_data,
-                    content_type='image/jpeg',
-                    headers={
-                        'Cache-Control': 'no-store, no-cache, must-revalidate, pre-check=0, post-check=0, max-age=0',
-                        'Pragma': 'no-cache'
-                    }
-                )
-        except asyncio.TimeoutError:
-            # Network backpressure detected. Drop the frame and free the memory.
-            return web.Response(status=503) # Service Unavailable
+            while self._is_running:
+                frame_data = self.stream_state.frame_bytes.get(video_id)
+                if frame_data:
+                    # Format the JPEG as a multipart frame
+                    part_boundary = (
+                        f"--frame\r\n"
+                        f"Content-Type: image/jpeg\r\n"
+                        f"Content-Length: {len(frame_data)}\r\n\r\n"
+                    ).encode('utf-8')
+                    
+                    try:
+                        async with asyncio.timeout(0.05): # 50ms is usually safer for network writes than 5ms
+                            await response.write(part_boundary + frame_data + b'\r\n')
+                    except asyncio.TimeoutError:
+                        # The TCP buffer is full (backpressure). 
+                        # We can log it, sleep briefly, and try the next frame on the next loop.
+                        await asyncio.sleep(0.01)
+                        continue 
+
+                # Match your stream's framerate (e.g., 30fps)
+                await asyncio.sleep(1/30) 
+                
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass # Client disconnected
+
+        return response
 
 
     async def start(self):
