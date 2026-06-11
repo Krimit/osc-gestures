@@ -71,6 +71,7 @@ class WebInterface:
                             "event": self.stream_state.event_number,
                             "current": self.stream_state.current_gesture,
                             "next": self.stream_state.next_gesture,
+                            "extra_info": getattr(self.stream_state, "extra_info", ""),
                             "fps_gpu": self.stream_state.fps_gpu,
                             "mps_osc": self.stream_state.mps_osc,
                             "active_videos": active_ids,
@@ -131,7 +132,7 @@ class WebInterface:
                 # Match your stream's framerate (e.g., 30fps)
                 await asyncio.sleep(1/30) 
                 
-        except (ConnectionResetError, asyncio.CancelledError):
+        except (ConnectionError, asyncio.CancelledError):
             pass # Client disconnected
 
         return response

@@ -84,6 +84,25 @@ body {
     gap: 40px;
 }
 
+.extra-info-item { 
+    display: flex; 
+    flex-direction: column; 
+    flex: 1; /* Takes up all remaining horizontal space */
+    border-left: 1px solid #333; /* Optional: Nice visual separator */
+    padding-left: 30px;
+    height: 100px; /* Give it a fixed height within the 140px footer */
+    justify-content: flex-start;
+}
+
+.extra-info-item .long-text {
+    font-size: 18px; /* Smaller than main gestures */
+    font-weight: normal;
+    color: #ccc;
+    white-space: normal; /* Allow text to wrap to new lines */
+    overflow-y: auto; /* Make it scrollable if text is massive */
+    line-height: 1.3;
+}
+
 #event-num { font-size: 80px; color: #0af; font-weight: bold; min-width: 100px; text-align: center; }
 .gesture-item { display: flex; flex-direction: column; min-width: 220px; }
 .label { color: #555; font-size: 11px; text-transform: uppercase; }

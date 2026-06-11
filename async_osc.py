@@ -128,6 +128,7 @@ class StreamState:
         self.event_number = -1
         self.current_gesture = None
         self.next_gesture = None
+        self.extra_info = ""
         # Stats
         self.mps_osc = 0
         self.fps_gpu = 0
@@ -444,7 +445,7 @@ def handle_models(address: str, *args: List[Any]) -> None:
 def handle_feedback(address: str, *args: List[Any]) -> None:
     logger.info("address: {}, message: {}".format(address, args))
     # We expect 3 args {event number, current gesture, next gesture}
-    if len(args) < 3:
+    if len(args) < 4:
         logger.error("Unexpected dispatcher arguments for {}: {}".format(address, args))
         return
 
@@ -458,16 +459,19 @@ def handle_feedback(address: str, *args: List[Any]) -> None:
     command = address.removeprefix("/feedback/")
     if command == "events":
         logger.info(f"Got an event change: {args}")
+        stream_state.last_updated = time.time()
         stream_state.event_number = args[0]
         stream_state.current_gesture = args[1]
+        stream_state.next_gesture = args[2]
 
         # Join arbitrary number of arguments for the long instruction
         # This handles: "lh", "duck", "and", "rh", "open" -> "lh duck and rh open"
-        instruction_text = " ".join(map(str, args[2:]))
+        instruction_text = " ".join(map(str, args[3:]))
+        stream_state.extra_info = instruction_text.replace("_", " ")
 
-        # Safety net: replace underscores if you're still transitioning Max data
-        stream_state.next_gesture = instruction_text.replace("_", " ")
-        stream_state.last_updated = time.time()
+        # Clear extra info if it is exactly the same as the next gesture
+        if stream_state.extra_info == stream_state.next_gesture:
+            stream_state.extra_info = ""
     else:
         logger.error("unrecognized command: " + command)
 
