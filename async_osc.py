@@ -470,7 +470,7 @@ def handle_feedback(address: str, *args: List[Any]) -> None:
         stream_state.extra_info = instruction_text.replace("_", " ")
 
         # Clear extra info if it is exactly the same as the next gesture
-        if stream_state.extra_info == stream_state.next_gesture:
+        if stream_state.extra_info == str(stream_state.next_gesture).replace("_", " "):
             stream_state.extra_info = ""
     else:
         logger.error("unrecognized command: " + command)
